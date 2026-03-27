@@ -3,6 +3,8 @@ interface CardChild {
   alt?: string
   children?: CardChild[]
   content?: string
+  disabled?: boolean
+  id?: string
   label?: string
   style?: string
   subtitle?: string
@@ -13,6 +15,16 @@ interface CardChild {
 }
 
 type LarkElement = Record<string, unknown>
+
+const COUNTER_START = 0
+
+let elementCounter = COUNTER_START
+
+const resetElementCounter = (): void => {
+  elementCounter = COUNTER_START
+}
+
+const nextElementId = (): string => `el_${String(elementCounter++)}`
 
 const buttonType = (style: string | undefined): string => {
   if (style === 'danger') {
@@ -26,20 +38,16 @@ const buttonType = (style: string | undefined): string => {
 
 const mapButton = (btn: CardChild): LarkElement => {
   const el: LarkElement = {
+    element_id: nextElementId(),
     tag: 'button',
     text: { content: btn.label, tag: 'plain_text' },
     type: buttonType(btn.style),
   }
   if (btn.value != null) {
-    el['value'] = { action: String(btn.value) }
+    el['behaviors'] = [{ type: 'callback', value: { action: String(btn.value) } }]
   }
   return el
 }
-
-const mapActions = (el: CardChild): LarkElement => ({
-  actions: (el.children ?? []).map((child) => mapButton(child)),
-  tag: 'action',
-})
 
 const mapSection = (el: CardChild): LarkElement | null => {
   const texts = (el.children ?? [])
@@ -54,28 +62,29 @@ const mapSection = (el: CardChild): LarkElement | null => {
   if (!texts) {
     return null
   }
-  return { content: texts, tag: 'markdown' }
+  return { content: texts, element_id: nextElementId(), tag: 'markdown' }
 }
 
-const mapChild = (child: CardChild): LarkElement | null => {
+const mapChild = (child: CardChild): LarkElement | LarkElement[] | null => {
   switch (child.type) {
     case 'text':
-      return { content: child.content, tag: 'markdown' }
+      return { content: child.content, element_id: nextElementId(), tag: 'markdown' }
     case 'divider':
-      return { tag: 'hr' }
+      return { element_id: nextElementId(), tag: 'hr' }
     case 'image':
       return {
         alt: { content: child.alt ?? '', tag: 'plain_text' },
+        element_id: nextElementId(),
         img_key: child.url,
         tag: 'img',
       }
     case 'actions':
-      return mapActions(child)
+      return (child.children ?? []).map((btn) => mapButton(btn))
     case 'section':
       return mapSection(child)
     default: {
       if ('content' in child && child.content) {
-        return { content: child.content as string, tag: 'markdown' }
+        return { content: child.content as string, element_id: nextElementId(), tag: 'markdown' }
       }
       return null
     }
@@ -83,8 +92,22 @@ const mapChild = (child: CardChild): LarkElement | null => {
 }
 
 const cardToLarkInteractive = (card: CardChild): Record<string, unknown> => {
-  const elements = (card.children ?? []).map(mapChild).filter(Boolean)
-  const result: Record<string, unknown> = { body: { elements } }
+  resetElementCounter()
+  const elements = (card.children ?? []).flatMap((child) => {
+    const result = mapChild(child)
+    if (Array.isArray(result)) {
+      return result
+    }
+    if (result) {
+      return [result]
+    }
+    return []
+  })
+  const result: Record<string, unknown> = {
+    body: { elements },
+    config: { update_multi: true },
+    schema: '2.0',
+  }
   if (card.title) {
     result['header'] = { template: 'blue', title: { content: card.title, tag: 'plain_text' } }
   }
