@@ -8,6 +8,7 @@ import type {
   EphemeralMessage,
   FetchOptions,
   FetchResult,
+  FileUpload,
   FormattedContent,
   Logger,
   RawMessage,
@@ -16,7 +17,7 @@ import type {
   WebhookOptions,
 } from 'chat'
 import type { LarkAdapterConfig, LarkRawMessage, LarkThreadId } from './types.ts'
-import { ValidationError, extractCard } from '@chat-adapter/shared'
+import { ValidationError, extractCard, extractFiles, toBuffer } from '@chat-adapter/shared'
 import { EventDispatcher } from '@larksuiteoapi/node-sdk'
 import { Message } from 'chat'
 import DedupCache from './dedup-cache.ts'
@@ -37,6 +38,7 @@ const ROOT_MSG_INDEX = 2
 const FIRST_ITEM_INDEX = 0
 const HTTP_BAD_REQUEST = 400
 const HTTP_OK = 200
+const LAST_INDEX = -1
 
 const toBase64Url = (str: string): string => Buffer.from(str).toString('base64url')
 
@@ -269,10 +271,16 @@ export default class LarkAdapter implements Adapter<LarkThreadId, LarkRawMessage
     message: AdapterPostableMessage,
   ): Promise<RawMessage<LarkRawMessage>> {
     const decoded = this.decodeThreadId(threadId)
+    const files = extractFiles(message)
+    const fileResults = await Promise.all(
+      files.map((file) => this.uploadAndSendFile(decoded, file)),
+    )
+    const lastFileResult = fileResults.at(LAST_INDEX) ?? null
     const { content, msgType } = renderMessage(message, this.converter)
-    const result = await this.sendOrReply(decoded, msgType, content)
-    const data = result as { data?: { message_id?: string } }
-    return { id: data.data?.message_id ?? '', raw: result as LarkRawMessage, threadId }
+    const textResult = await this.sendOrReply(decoded, msgType, content)
+    const finalResult = lastFileResult ?? textResult
+    const data = finalResult as { data?: { message_id?: string } }
+    return { id: data.data?.message_id ?? '', raw: finalResult as LarkRawMessage, threadId }
   }
 
   async editMessage(
@@ -530,6 +538,37 @@ export default class LarkAdapter implements Adapter<LarkThreadId, LarkRawMessage
     void promise.then(undefined, (err: unknown) => {
       this.logger?.error?.('Event processing error', err)
     })
+  }
+
+  private async sendUploadedImage(decoded: LarkThreadId, buf: Buffer): Promise<unknown> {
+    const uploadRes = await this.api.uploadImage(buf)
+    const uploadData = uploadRes as { data?: { image_key?: string } }
+    const imageKey = uploadData.data?.image_key ?? ''
+    return this.sendOrReply(decoded, 'image', JSON.stringify({ image_key: imageKey }))
+  }
+
+  private async sendUploadedFile(
+    decoded: LarkThreadId,
+    buf: Buffer,
+    file: FileUpload,
+  ): Promise<unknown> {
+    const mime = file.mimeType ?? ''
+    const uploadRes = await this.api.uploadFile(buf, file.filename, mime)
+    const uploadData = uploadRes as { data?: { file_key?: string } }
+    const fileKey = uploadData.data?.file_key ?? ''
+    return this.sendOrReply(decoded, 'file', JSON.stringify({ file_key: fileKey }))
+  }
+
+  private async uploadAndSendFile(decoded: LarkThreadId, file: FileUpload): Promise<unknown> {
+    const buf = await toBuffer(file.data, { platform: ADAPTER_NAME })
+    if (!buf) {
+      return null
+    }
+    const mime = file.mimeType ?? ''
+    if (mime.startsWith('image/')) {
+      return this.sendUploadedImage(decoded, buf)
+    }
+    return this.sendUploadedFile(decoded, buf, file)
   }
 
   private async sendOrReply(

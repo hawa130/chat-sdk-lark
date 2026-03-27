@@ -5,7 +5,7 @@ import type { LarkRawMessage } from '../src/types.ts'
 import fixtures from './fixtures.ts'
 import server from './setup.ts'
 
-const { makeChallengeEvent, makeMessageEvent, makeRequest } = fixtures
+const { makeChallengeEvent, makeMessageEvent, makeReactionEvent, makeRequest } = fixtures
 
 const BASE = 'https://open.feishu.cn'
 const TOKEN_URL = `${BASE}/open-apis/auth/v3/tenant_access_token/internal`
@@ -193,6 +193,24 @@ describe('LarkAdapter', () => {
       const req = makeRequest(makeMessageEvent())
       expect((await adapter.handleWebhook(req)).status).toBe(HTTP_OK)
     })
+
+    it('routes reaction event to processReaction', async () => {
+      const adapter = makeAdapter()
+      const mockChat = await initAdapter(adapter)
+
+      const event = makeReactionEvent('created')
+      const promises: Array<Promise<unknown>> = []
+      const options = {
+        waitUntil: (task: Promise<unknown>) => {
+          promises.push(task)
+        },
+      }
+
+      const res = await adapter.handleWebhook(makeRequest(event), options)
+      expect(res.status).toBe(HTTP_OK)
+      await Promise.allSettled(promises) // eslint-disable-line promise/avoid-new
+      expect(mockChat.processReaction).toHaveBeenCalledTimes(ONCE)
+    })
   })
 
   // -- 7C: Message parsing --
@@ -347,6 +365,26 @@ describe('LarkAdapter', () => {
       const threadId = adapter.encodeThreadId({ chatId: 'oc_chat001' })
       await adapter.deleteMessage(threadId, 'om_del1')
       expect(deletedId).toBe('om_del1')
+    })
+
+    it('postMessage with card sends msg_type interactive', async () => {
+      let captured = undefined as unknown
+      server.use(
+        tokenHandler,
+        http.post(`${BASE}/open-apis/im/v1/messages`, async ({ request }) => {
+          captured = await request.json()
+          return HttpResponse.json({ code: 0, data: { message_id: 'om_card1' } })
+        }),
+      )
+      const card = {
+        children: [],
+        title: 'Test Card',
+        type: 'card' as const,
+      }
+      const threadId = adapter.encodeThreadId({ chatId: 'oc_chat001' })
+      const result = await adapter.postMessage(threadId, card)
+      expect(captured).toMatchObject({ msg_type: 'interactive' })
+      expect(result.id).toBe('om_card1')
     })
   })
 
