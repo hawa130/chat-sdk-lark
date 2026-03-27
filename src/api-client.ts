@@ -182,6 +182,37 @@ class LarkApiClient {
     )
   }
 
+  async createCard(cardJson: string) {
+    return this.call(() =>
+      this.client.cardkit.v1.card.create({
+        data: { data: cardJson, type: 'card_json' },
+      }),
+    )
+  }
+
+  async streamUpdateText(opts: {
+    cardId: string
+    content: string
+    elementId: string
+    sequence: number
+  }) {
+    return this.call(() =>
+      this.client.cardkit.v1.cardElement.content({
+        data: { content: opts.content, sequence: opts.sequence },
+        path: { card_id: opts.cardId, element_id: opts.elementId },
+      }),
+    )
+  }
+
+  async updateCardSettings(cardId: string, settings: string, sequence: number) {
+    return this.call(() =>
+      this.client.cardkit.v1.card.settings({
+        data: { sequence, settings },
+        path: { card_id: cardId },
+      }),
+    )
+  }
+
   private async call<Result>(fn: () => Promise<Result>): Promise<Result> {
     try {
       return await fn()

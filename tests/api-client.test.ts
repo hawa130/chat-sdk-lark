@@ -112,11 +112,11 @@ describe('LarkApiClient', () => {
 
   it('listMessages — lists with pagination', async () => {
     const pageSize = 10
-    const captured: { params?: URLSearchParams } = {}
+    let capturedParams: URLSearchParams | undefined = undefined
     server.use(
       tokenHandler,
       http.get(`${BASE}/open-apis/im/v1/messages`, ({ request }) => {
-        captured.params = new URL(request.url).searchParams
+        capturedParams = new URL(request.url).searchParams
         return HttpResponse.json({
           code: 0,
           data: { has_more: true, items: [], page_token: 'next-page' },
@@ -127,10 +127,10 @@ describe('LarkApiClient', () => {
     const client = makeClient()
     const result = await client.listMessages('oc_chat1', 'tok_abc', pageSize)
 
-    expect(captured.params?.get('container_id')).toBe('oc_chat1')
-    expect(captured.params?.get('container_id_type')).toBe('chat')
-    expect(captured.params?.get('page_token')).toBe('tok_abc')
-    expect(captured.params?.get('page_size')).toBe(String(pageSize))
+    expect(capturedParams?.get('container_id')).toBe('oc_chat1')
+    expect(capturedParams?.get('container_id_type')).toBe('chat')
+    expect(capturedParams?.get('page_token')).toBe('tok_abc')
+    expect(capturedParams?.get('page_size')).toBe(String(pageSize))
     expect(result).toMatchObject({ data: { has_more: true } })
   })
 
@@ -160,6 +160,70 @@ describe('LarkApiClient', () => {
     const client = makeClient()
     await expect(client.sendMessage('oc_chat1', 'text', '{"text":"hi"}')).rejects.toMatchObject({
       name: 'AdapterRateLimitError',
+    })
+  })
+
+  describe('CardKit', () => {
+    it('createCard — creates card entity', async () => {
+      let captured: unknown = undefined
+      server.use(
+        tokenHandler,
+        http.post(`${BASE}/open-apis/cardkit/v1/cards`, async ({ request }) => {
+          captured = await request.json()
+          return HttpResponse.json({ code: 0, data: { card_id: 'card_001' } })
+        }),
+      )
+
+      const client = makeClient()
+      const result = await client.createCard('{"schema":"2.0"}')
+
+      expect(captured).toMatchObject({ data: '{"schema":"2.0"}', type: 'card_json' })
+      expect(result).toMatchObject({ data: { card_id: 'card_001' } })
+    })
+
+    it('streamUpdateText — streams text to element', async () => {
+      const sequence = 1
+      let captured: unknown = undefined
+      server.use(
+        tokenHandler,
+        http.put(
+          `${BASE}/open-apis/cardkit/v1/cards/:cardId/elements/:elementId/content`,
+          async ({ request }) => {
+            captured = await request.json()
+            return HttpResponse.json({ code: 0, data: {} })
+          },
+        ),
+      )
+
+      const client = makeClient()
+      await client.streamUpdateText({
+        cardId: 'card_001',
+        content: 'Hello world',
+        elementId: 'stream_md',
+        sequence,
+      })
+
+      expect(captured).toMatchObject({ content: 'Hello world', sequence })
+    })
+
+    it('updateCardSettings — updates card config', async () => {
+      const sequence = 2
+      let captured: unknown = undefined
+      server.use(
+        tokenHandler,
+        http.patch(`${BASE}/open-apis/cardkit/v1/cards/:cardId/settings`, async ({ request }) => {
+          captured = await request.json()
+          return HttpResponse.json({ code: 0, data: {} })
+        }),
+      )
+
+      const client = makeClient()
+      await client.updateCardSettings('card_001', '{"config":{"streaming_mode":false}}', sequence)
+
+      expect(captured).toMatchObject({
+        sequence,
+        settings: '{"config":{"streaming_mode":false}}',
+      })
     })
   })
 })
