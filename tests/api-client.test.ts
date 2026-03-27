@@ -112,11 +112,11 @@ describe('LarkApiClient', () => {
 
   it('listMessages — lists with pagination', async () => {
     const pageSize = 10
-    let capturedParams: URLSearchParams | undefined = undefined
+    const captured: { params?: URLSearchParams } = {}
     server.use(
       tokenHandler,
       http.get(`${BASE}/open-apis/im/v1/messages`, ({ request }) => {
-        capturedParams = new URL(request.url).searchParams
+        captured.params = new URL(request.url).searchParams
         return HttpResponse.json({
           code: 0,
           data: { has_more: true, items: [], page_token: 'next-page' },
@@ -127,10 +127,10 @@ describe('LarkApiClient', () => {
     const client = makeClient()
     const result = await client.listMessages('oc_chat1', 'tok_abc', pageSize)
 
-    expect(capturedParams?.get('container_id')).toBe('oc_chat1')
-    expect(capturedParams?.get('container_id_type')).toBe('chat')
-    expect(capturedParams?.get('page_token')).toBe('tok_abc')
-    expect(capturedParams?.get('page_size')).toBe(String(pageSize))
+    expect(captured.params?.get('container_id')).toBe('oc_chat1')
+    expect(captured.params?.get('container_id_type')).toBe('chat')
+    expect(captured.params?.get('page_token')).toBe('tok_abc')
+    expect(captured.params?.get('page_size')).toBe(String(pageSize))
     expect(result).toMatchObject({ data: { has_more: true } })
   })
 

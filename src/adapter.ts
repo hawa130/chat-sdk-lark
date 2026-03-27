@@ -17,6 +17,7 @@ import type {
   WebhookOptions,
 } from 'chat'
 import type { LarkAdapterConfig, LarkRawMessage, LarkThreadId } from './types.ts'
+import type { PlatformName } from '@chat-adapter/shared'
 import { ValidationError, extractCard, extractFiles, toBuffer } from '@chat-adapter/shared'
 import { EventDispatcher } from '@larksuiteoapi/node-sdk'
 import { Message } from 'chat'
@@ -228,7 +229,7 @@ export default class LarkAdapter implements Adapter<LarkThreadId, LarkRawMessage
   // -- Webhook handling (7B) --
 
   async handleWebhook(request: Request, options?: WebhookOptions): Promise<Response> {
-    const body = await this.parseWebhookBody(request.clone())
+    const body = await this.parseWebhookBody(request.clone() as Request)
     if (!body) {
       return new Response('Invalid JSON', { status: HTTP_BAD_REQUEST })
     }
@@ -394,7 +395,7 @@ export default class LarkAdapter implements Adapter<LarkThreadId, LarkRawMessage
 
   // -- Misc (7F) --
 
-  async startTyping(): Promise<void> {
+  async startTyping(_threadId?: string, _status?: string): Promise<void> {
     // Lark has no typing indicator API — no-op
   }
 
@@ -486,7 +487,13 @@ export default class LarkAdapter implements Adapter<LarkThreadId, LarkRawMessage
       raw: data,
       rawEmoji: emojiType,
       threadId: '',
-      userId: ev.user_id?.open_id ?? '',
+      user: {
+        fullName: '',
+        isBot: 'unknown' as const,
+        isMe: false,
+        userId: ev.user_id?.open_id ?? '',
+        userName: '',
+      },
     })
   }
 
@@ -560,7 +567,7 @@ export default class LarkAdapter implements Adapter<LarkThreadId, LarkRawMessage
   }
 
   private async uploadAndSendFile(decoded: LarkThreadId, file: FileUpload): Promise<unknown> {
-    const buf = await toBuffer(file.data, { platform: ADAPTER_NAME })
+    const buf = await toBuffer(file.data, { platform: ADAPTER_NAME as PlatformName })
     if (!buf) {
       return null
     }

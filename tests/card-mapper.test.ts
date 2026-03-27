@@ -4,6 +4,10 @@ import cardMapper from '../src/card-mapper.ts'
 const { cardToFallbackText, cardToLarkInteractive } = cardMapper
 
 const SINGLE = 1
+const FIRST = 0
+
+type LarkEl = { tag: string } & Record<string, unknown>
+type LarkCard = { body: { elements: LarkEl[] } }
 
 const byTag = (tag: string) => (el: { tag: string }) => el.tag === tag
 
@@ -13,9 +17,9 @@ describe('cardToLarkInteractive', () => {
       children: [{ content: 'Hello **world**', style: undefined, type: 'text' as const }],
       type: 'card' as const,
     }
-    const result = cardToLarkInteractive(card)
+    const result = cardToLarkInteractive(card) as LarkCard
     const { elements } = result.body
-    const mdEl = elements.find(byTag('markdown'))
+    const mdEl = elements.find(byTag('markdown')) as LarkEl
     expect(mdEl).toBeDefined()
     expect(mdEl.content).toBe('Hello **world**')
   })
@@ -25,7 +29,7 @@ describe('cardToLarkInteractive', () => {
       children: [{ type: 'divider' as const }],
       type: 'card' as const,
     }
-    const result = cardToLarkInteractive(card)
+    const result = cardToLarkInteractive(card) as LarkCard
     const hrEl = result.body.elements.find(byTag('hr'))
     expect(hrEl).toBeDefined()
   })
@@ -49,13 +53,14 @@ describe('cardToLarkInteractive', () => {
       ],
       type: 'card' as const,
     }
-    const result = cardToLarkInteractive(card)
-    const actionEl = result.body.elements.find(byTag('action'))
+    const result = cardToLarkInteractive(card) as LarkCard
+    const actionEl = result.body.elements.find(byTag('action')) as LarkEl
     expect(actionEl).toBeDefined()
-    const [firstAction] = actionEl.actions
-    expect(actionEl.actions).toHaveLength(SINGLE)
+    const actions = actionEl.actions as LarkEl[]
+    const firstAction = actions[FIRST] as LarkEl
+    expect(actions).toHaveLength(SINGLE)
     expect(firstAction.tag).toBe('button')
-    expect(firstAction.text.content).toBe('Click me')
+    expect((firstAction.text as LarkEl).content).toBe('Click me')
   })
 
   it('card with image → { tag: "img", ... }', () => {
@@ -63,11 +68,11 @@ describe('cardToLarkInteractive', () => {
       children: [{ alt: 'A photo', type: 'image' as const, url: 'img_key_123' }],
       type: 'card' as const,
     }
-    const result = cardToLarkInteractive(card)
-    const imgEl = result.body.elements.find(byTag('img'))
+    const result = cardToLarkInteractive(card) as LarkCard
+    const imgEl = result.body.elements.find(byTag('img')) as LarkEl
     expect(imgEl).toBeDefined()
     expect(imgEl.img_key).toBe('img_key_123')
-    expect(imgEl.alt.content).toBe('A photo')
+    expect((imgEl.alt as LarkEl).content).toBe('A photo')
   })
 
   it('unknown component degrades to markdown if content exists', () => {
@@ -80,7 +85,7 @@ describe('cardToLarkInteractive', () => {
       ],
       type: 'card' as const,
     }
-    const result = cardToLarkInteractive(card)
+    const result = cardToLarkInteractive(card) as LarkCard
     const mdEl = result.body.elements.find(byTag('markdown'))
     expect(mdEl).toBeDefined()
   })

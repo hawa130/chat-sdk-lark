@@ -1,12 +1,16 @@
-import type { Actions, Button, Card, CardText, Image, Section } from 'chat'
-
-type CardChild =
-  | Actions
-  | Button
-  | CardText
-  | Image
-  | Section
-  | { children?: CardChild[]; content?: string; type: string }
+/** Minimal shapes for card elements (JSX components, not importable as types). */
+interface CardChild {
+  alt?: string
+  children?: CardChild[]
+  content?: string
+  label?: string
+  style?: string
+  subtitle?: string
+  title?: string
+  type: string
+  url?: string
+  value?: unknown
+}
 
 type LarkElement = Record<string, unknown>
 
@@ -20,7 +24,7 @@ const buttonType = (style: string | undefined): string => {
   return 'primary'
 }
 
-const mapButton = (btn: Button): LarkElement => {
+const mapButton = (btn: CardChild): LarkElement => {
   const el: LarkElement = {
     tag: 'button',
     text: { content: btn.label, tag: 'plain_text' },
@@ -32,16 +36,16 @@ const mapButton = (btn: Button): LarkElement => {
   return el
 }
 
-const mapActions = (el: Actions): LarkElement => ({
-  actions: el.children.map((child) => mapButton(child as Button)),
+const mapActions = (el: CardChild): LarkElement => ({
+  actions: (el.children ?? []).map((child) => mapButton(child)),
   tag: 'action',
 })
 
-const mapSection = (el: Section): LarkElement | null => {
-  const texts = el.children
+const mapSection = (el: CardChild): LarkElement | null => {
+  const texts = (el.children ?? [])
     .map((child) => {
       if ('content' in child) {
-        return (child as CardText).content
+        return child.content
       }
       return null
     })
@@ -56,19 +60,19 @@ const mapSection = (el: Section): LarkElement | null => {
 const mapChild = (child: CardChild): LarkElement | null => {
   switch (child.type) {
     case 'text':
-      return { content: (child as CardText).content, tag: 'markdown' }
+      return { content: child.content, tag: 'markdown' }
     case 'divider':
       return { tag: 'hr' }
     case 'image':
       return {
-        alt: { content: (child as Image).alt ?? '', tag: 'plain_text' },
-        img_key: (child as Image).url,
+        alt: { content: child.alt ?? '', tag: 'plain_text' },
+        img_key: child.url,
         tag: 'img',
       }
     case 'actions':
-      return mapActions(child as Actions)
+      return mapActions(child)
     case 'section':
-      return mapSection(child as Section)
+      return mapSection(child)
     default: {
       if ('content' in child && child.content) {
         return { content: child.content as string, tag: 'markdown' }
@@ -78,8 +82,8 @@ const mapChild = (child: CardChild): LarkElement | null => {
   }
 }
 
-const cardToLarkInteractive = (card: Card): Record<string, unknown> => {
-  const elements = card.children.map(mapChild).filter(Boolean)
+const cardToLarkInteractive = (card: CardChild): Record<string, unknown> => {
+  const elements = (card.children ?? []).map(mapChild).filter(Boolean)
   const result: Record<string, unknown> = { body: { elements } }
   if (card.title) {
     result['header'] = { template: 'blue', title: { content: card.title, tag: 'plain_text' } }
@@ -87,17 +91,17 @@ const cardToLarkInteractive = (card: Card): Record<string, unknown> => {
   return result
 }
 
-const cardToFallbackText = (card: Card): string => {
+const cardToFallbackText = (card: CardChild): string => {
   const parts: string[] = []
   if (card.title) {
     parts.push(`**${card.title}**`)
   }
-  if ('subtitle' in card && card.subtitle) {
-    parts.push(card.subtitle as string)
+  if (card.subtitle) {
+    parts.push(card.subtitle)
   }
-  for (const child of card.children) {
+  for (const child of card.children ?? []) {
     if (child.type === 'text') {
-      parts.push((child as CardText).content)
+      parts.push(child.content ?? '')
     }
   }
   return parts.join('\n')
