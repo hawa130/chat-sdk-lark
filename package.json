@@ -1,0 +1,18 @@
+{
+  "name": "chat-adapter-lark",
+  "type": "module",
+  "module": "index.ts",
+  "scripts": {
+    "lint": "oxlint --type-aware --deny-warnings",
+    "lint:fix": "oxlint --type-aware --fix",
+    "fmt": "oxfmt --write .",
+    "fmt:check": "oxfmt --check ."
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "oxfmt": "^0.42.0",
+    "oxlint": "^1.57.0",
+    "oxlint-tsgolint": "^0.17.4",
+    "typescript": "^5"
+  }
+}
