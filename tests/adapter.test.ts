@@ -15,7 +15,10 @@ const HTTP_OK = 200
 const HTTP_BAD_REQUEST = 400
 const ONCE = 1
 const ONE_MESSAGE = 1
-const LAST_INDEX_OFFSET = 1
+const STREAM_CHUNK_COUNT = 3
+const SEQ_1 = 1
+const SEQ_2 = 2
+const SEQ_3 = 3
 
 const tokenHandler = http.post(TOKEN_URL, () =>
   HttpResponse.json({ code: 0, expire: 7200, tenant_access_token: 'test-token' }),
@@ -26,6 +29,10 @@ const botInfoHandler = http.get(`${BASE}/open-apis/bot/v3/info`, () =>
     bot: { app_name: 'TestBot', open_id: 'ou_bot001' },
     code: 0,
   }),
+)
+
+const createCardHandler = http.post(`${BASE}/open-apis/cardkit/v1/cards`, () =>
+  HttpResponse.json({ code: 0, data: { card_id: 'card_test_001' } }),
 )
 
 const makeAdapter = () =>
@@ -58,7 +65,7 @@ const makeMockChat = () => ({
 
 const initAdapter = async (adapter: LarkAdapter) => {
   const mockChat = makeMockChat()
-  server.use(tokenHandler, botInfoHandler)
+  server.use(tokenHandler, botInfoHandler, createCardHandler)
   await adapter.initialize(mockChat as never)
   return mockChat
 }
@@ -78,6 +85,15 @@ const makeRaw = (overrides?: Partial<LarkRawMessage>): LarkRawMessage => ({
   },
   ...overrides,
 })
+
+const makeStreamGen = () => {
+  const chunks = ['Hello', ' World', '!']
+  return async function* streamChunks() {
+    for (const ch of chunks) {
+      yield ch
+    }
+  }
+}
 
 beforeAll(() => server.listen({ onUnhandledRequest: 'bypass' }))
 afterEach(() => server.resetHandlers())
@@ -367,10 +383,11 @@ describe('LarkAdapter', () => {
       expect(deletedId).toBe('om_del1')
     })
 
-    it('postMessage with card sends msg_type interactive', async () => {
+    it('postMessage with card sends via card_id', async () => {
       let captured = undefined as unknown
       server.use(
         tokenHandler,
+        createCardHandler,
         http.post(`${BASE}/open-apis/im/v1/messages`, async ({ request }) => {
           captured = await request.json()
           return HttpResponse.json({ code: 0, data: { message_id: 'om_card1' } })
@@ -384,6 +401,8 @@ describe('LarkAdapter', () => {
       const threadId = adapter.encodeThreadId({ chatId: 'oc_chat001' })
       const result = await adapter.postMessage(threadId, card)
       expect(captured).toMatchObject({ msg_type: 'interactive' })
+      const content = JSON.parse((captured as { content: string }).content)
+      expect(content).toMatchObject({ data: { card_id: 'card_test_001' }, type: 'card' })
       expect(result.id).toBe('om_card1')
     })
   })
@@ -587,48 +606,57 @@ describe('LarkAdapter', () => {
       await initAdapter(adapter)
     })
 
-    it('posts placeholder then edits with accumulated text', async () => {
-      const edits: string[] = []
-      let postContent = undefined as unknown
+    it('creates streaming card, sends updates, then closes streaming', async () => {
+      const streamUpdates: Array<{ content: string; sequence: number }> = []
+      let settingsCaptured = undefined as unknown
+
       server.use(
         tokenHandler,
-        http.post(`${BASE}/open-apis/im/v1/messages`, async ({ request }) => {
-          const body = (await request.json()) as { content?: string }
-          postContent = body.content
-          return HttpResponse.json({ code: 0, data: { message_id: 'om_stream1' } })
-        }),
-        http.patch(`${BASE}/open-apis/im/v1/messages/:id`, async ({ request }) => {
-          const body = (await request.json()) as { content?: string }
-          edits.push(body.content ?? '')
-          return HttpResponse.json({ code: 0 })
+        createCardHandler,
+        http.post(`${BASE}/open-apis/im/v1/messages`, () =>
+          HttpResponse.json({ code: 0, data: { message_id: 'om_stream1' } }),
+        ),
+        http.put(
+          `${BASE}/open-apis/cardkit/v1/cards/:cardId/elements/:elementId/content`,
+          async ({ request }) => {
+            const body = (await request.json()) as { content: string; sequence: number }
+            streamUpdates.push(body)
+            return HttpResponse.json({ code: 0, data: {} })
+          },
+        ),
+        http.patch(`${BASE}/open-apis/cardkit/v1/cards/:cardId/settings`, async ({ request }) => {
+          settingsCaptured = await request.json()
+          return HttpResponse.json({ code: 0, data: {} })
         }),
       )
 
-      const chunks = ['Hello', ' World', '!']
-      const gen = async function* streamChunks() {
-        for (const ch of chunks) {
-          yield ch
-        }
-      }
-
       const threadId = adapter.encodeThreadId({ chatId: 'oc_chat001' })
-      await adapter.stream(threadId, gen())
+      const result = await adapter.stream(threadId, makeStreamGen()())
 
-      expect(String(postContent)).toContain('...')
-      expect(edits[edits.length - LAST_INDEX_OFFSET]).toContain('Hello World!')
+      expect(result.id).toBe('om_stream1')
+      expect(streamUpdates).toHaveLength(STREAM_CHUNK_COUNT)
+      expect(streamUpdates[streamUpdates.length - ONCE].content).toBe('Hello World!')
+      expect(streamUpdates.map((item) => item.sequence)).toEqual([SEQ_1, SEQ_2, SEQ_3])
+      expect(settingsCaptured).toMatchObject({
+        settings: expect.stringContaining('streaming_mode'),
+      })
     })
 
-    it('handles stream interruption with final edit', async () => {
-      const edits: string[] = []
+    it('closes streaming mode even on stream error', async () => {
+      let settingsClosed = false
+
       server.use(
         tokenHandler,
+        createCardHandler,
         http.post(`${BASE}/open-apis/im/v1/messages`, () =>
           HttpResponse.json({ code: 0, data: { message_id: 'om_stream2' } }),
         ),
-        http.patch(`${BASE}/open-apis/im/v1/messages/:id`, async ({ request }) => {
-          const body = (await request.json()) as { content?: string }
-          edits.push(body.content ?? '')
-          return HttpResponse.json({ code: 0 })
+        http.put(`${BASE}/open-apis/cardkit/v1/cards/:cardId/elements/:elementId/content`, () =>
+          HttpResponse.json({ code: 0, data: {} }),
+        ),
+        http.patch(`${BASE}/open-apis/cardkit/v1/cards/:cardId/settings`, () => {
+          settingsClosed = true
+          return HttpResponse.json({ code: 0, data: {} })
         }),
       )
 
@@ -639,7 +667,7 @@ describe('LarkAdapter', () => {
 
       const threadId = adapter.encodeThreadId({ chatId: 'oc_chat001' })
       await expect(adapter.stream(threadId, gen())).rejects.toThrow('stream broke')
-      expect(edits.some((edit) => edit.includes('partial'))).toBe(true)
+      expect(settingsClosed).toBe(true)
     })
   })
 

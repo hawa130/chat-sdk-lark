@@ -20,6 +20,10 @@ const botInfoHandler = http.get(`${BASE}/open-apis/bot/v3/info`, () =>
   HttpResponse.json({ bot: { app_name: 'TestBot', open_id: 'ou_bot001' }, code: 0 }),
 )
 
+const createCardHandler = http.post(`${BASE}/open-apis/cardkit/v1/cards`, () =>
+  HttpResponse.json({ code: 0, data: { card_id: 'card_int_001' } }),
+)
+
 const makeAdapter = () => new LarkAdapter({ appId: 'test-app-id', appSecret: 'test-app-secret' })
 
 const makeMockChat = () => ({
@@ -61,7 +65,7 @@ const sendEvent = async (adapter: LarkAdapter, body: unknown): Promise<void> => 
 
 const initAdapter = async (adapter: LarkAdapter) => {
   const mockChat = makeMockChat()
-  server.use(tokenHandler, botInfoHandler)
+  server.use(tokenHandler, botInfoHandler, createCardHandler)
   await adapter.initialize(mockChat as never)
   return mockChat
 }
@@ -97,25 +101,6 @@ const makeThreadReplyEvent = () =>
     },
   })
 
-const setupStreamHandlers = (
-  placeholderRef: { value: string | undefined },
-  editContents: string[],
-) => {
-  server.use(
-    tokenHandler,
-    http.post(`${BASE}/open-apis/im/v1/messages`, async ({ request }) => {
-      const body = (await request.json()) as { content?: string }
-      placeholderRef.value = body.content
-      return HttpResponse.json({ code: 0, data: { message_id: 'om_stream1' } })
-    }),
-    http.patch(`${BASE}/open-apis/im/v1/messages/:id`, async ({ request }) => {
-      const body = (await request.json()) as { content?: string }
-      editContents.push(body.content ?? '')
-      return HttpResponse.json({ code: 0 })
-    }),
-  )
-}
-
 const assertProcessMessageCalledWithMention = (
   adapter: LarkAdapter,
   mockChat: ReturnType<typeof makeMockChat>,
@@ -126,17 +111,6 @@ const assertProcessMessageCalledWithMention = (
   expect(threadId).toMatch(/^lark:/)
   expect(message.isMention).toBe(true)
   return threadId
-}
-
-const assertStreamResult = (
-  placeholderRef: { value: string | undefined },
-  editContents: string[],
-  resultId: string,
-) => {
-  expect(placeholderRef.value).toContain('...')
-  const lastEdit = editContents[editContents.length - LAST_INDEX_OFFSET]
-  expect(lastEdit).toContain('Hello world!')
-  expect(resultId).toBe('om_stream1')
 }
 
 const makeStreamChunks = async function* streamChunks() {
@@ -195,17 +169,34 @@ describe('integration', () => {
   })
 
   // -- Streaming E2E --
-  it('streaming: posts placeholder, edits during stream, final edit with full content', async () => {
+  it('streaming: creates card entity, streams text, closes streaming mode', async () => {
     const adapter = makeAdapter()
     await initAdapter(adapter)
-    const placeholderRef = { value: undefined as string | undefined }
-    const editContents: string[] = []
+    const streamUpdates: string[] = []
 
-    setupStreamHandlers(placeholderRef, editContents)
+    server.use(
+      tokenHandler,
+      createCardHandler,
+      http.post(`${BASE}/open-apis/im/v1/messages`, () =>
+        HttpResponse.json({ code: 0, data: { message_id: 'om_stream1' } }),
+      ),
+      http.put(
+        `${BASE}/open-apis/cardkit/v1/cards/:cardId/elements/:elementId/content`,
+        async ({ request }) => {
+          const body = (await request.json()) as { content: string }
+          streamUpdates.push(body.content)
+          return HttpResponse.json({ code: 0, data: {} })
+        },
+      ),
+      http.patch(`${BASE}/open-apis/cardkit/v1/cards/:cardId/settings`, () =>
+        HttpResponse.json({ code: 0, data: {} }),
+      ),
+    )
 
     const threadId = adapter.encodeThreadId({ chatId: 'oc_chat001' })
     const result = await adapter.stream(threadId, makeStreamChunks())
-    assertStreamResult(placeholderRef, editContents, result.id)
+    expect(result.id).toBe('om_stream1')
+    expect(streamUpdates[streamUpdates.length - LAST_INDEX_OFFSET]).toContain('Hello world!')
   })
 
   // -- Event deduplication --
