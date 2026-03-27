@@ -30,8 +30,8 @@ import cardMapper from './card-mapper.ts'
 
 const ADAPTER_NAME = 'lark'
 const DEDUP_CAPACITY = 500
-const STREAM_THROTTLE_MS = 400
-const STREAM_PLACEHOLDER = '...'
+const STREAM_ELEMENT_ID = 'stream_md'
+const INITIAL_SEQUENCE = 1
 const MIN_DECODE_PARTS = 2
 const PREFIX_INDEX = 0
 const CHAT_ID_INDEX = 1
@@ -45,15 +45,12 @@ const toBase64Url = (str: string): string => Buffer.from(str).toString('base64ur
 
 const fromBase64Url = (str: string): string => Buffer.from(str, 'base64url').toString()
 
-const renderCardMessage = (
-  message: AdapterPostableMessage,
-): { content: string; msgType: string } | null => {
+const renderCardMessage = (message: AdapterPostableMessage): Record<string, unknown> | null => {
   const card = extractCard(message)
   if (!card) {
     return null
   }
-  const interactive = cardMapper.cardToLarkInteractive(card)
-  return { content: JSON.stringify(interactive), msgType: 'interactive' }
+  return cardMapper.cardToLarkInteractive(card)
 }
 
 const renderObjectMessage = (
@@ -79,7 +76,7 @@ const renderMessage = (
   if (typeof message === 'string') {
     return converter.renderForSend({ text: message })
   }
-  return renderCardMessage(message) ?? renderObjectMessage(message, converter)
+  return renderObjectMessage(message, converter)
 }
 
 const extractEmojiName = (emoji: EmojiValue | string): string => {
@@ -277,8 +274,7 @@ export default class LarkAdapter implements Adapter<LarkThreadId, LarkRawMessage
       files.map((file) => this.uploadAndSendFile(decoded, file)),
     )
     const lastFileResult = fileResults.at(LAST_INDEX) ?? null
-    const { content, msgType } = renderMessage(message, this.converter)
-    const textResult = await this.sendOrReply(decoded, msgType, content)
+    const textResult = await this.sendMessageContent(decoded, message)
     const finalResult = lastFileResult ?? textResult
     const data = finalResult as { data?: { message_id?: string } }
     return { id: data.data?.message_id ?? '', raw: finalResult as LarkRawMessage, threadId }
@@ -409,21 +405,29 @@ export default class LarkAdapter implements Adapter<LarkThreadId, LarkRawMessage
     threadId: string,
     textStream: AsyncIterable<string | StreamChunk>,
   ): Promise<RawMessage<LarkRawMessage>> {
-    const posted = await this.postMessage(threadId, STREAM_PLACEHOLDER)
-    const state = { accumulated: '', lastEditTime: 0 }
+    const { cardId, messageId } = await this.createStreamingCard(this.decodeThreadId(threadId))
+    let sequence = INITIAL_SEQUENCE
+    let accumulated = ''
 
     try {
       for await (const chunk of textStream) {
-        state.accumulated += chunkToText(chunk)
-        await this.throttledEdit(threadId, posted.id, state)
+        accumulated += chunkToText(chunk)
+        await this.api.streamUpdateText({
+          cardId,
+          content: accumulated,
+          elementId: STREAM_ELEMENT_ID,
+          sequence: sequence++,
+        })
       }
     } finally {
-      if (state.accumulated) {
-        await this.editMessage(threadId, posted.id, state.accumulated)
-      }
+      await this.api.updateCardSettings(
+        cardId,
+        JSON.stringify({ config: { streaming_mode: false } }),
+        sequence,
+      )
     }
 
-    return posted
+    return { id: messageId, raw: {} as LarkRawMessage, threadId }
   }
 
   // -- Ephemeral (7H) --
@@ -578,6 +582,55 @@ export default class LarkAdapter implements Adapter<LarkThreadId, LarkRawMessage
     return this.sendUploadedFile(decoded, buf, file)
   }
 
+  private async sendMessageContent(
+    decoded: LarkThreadId,
+    message: AdapterPostableMessage,
+  ): Promise<unknown> {
+    const cardJson = renderCardMessage(message)
+    if (cardJson) {
+      return this.sendCardMessage(decoded, cardJson)
+    }
+    return this.sendTextMessage(decoded, message)
+  }
+
+  private async sendCardMessage(
+    decoded: LarkThreadId,
+    cardJson: Record<string, unknown>,
+  ): Promise<unknown> {
+    const res = await this.api.createCard(JSON.stringify(cardJson))
+    const cardData = res as { data?: { card_id?: string } }
+    const cardId = cardData.data?.card_id ?? ''
+    const content = JSON.stringify({ data: { card_id: cardId }, type: 'card' })
+    return this.sendOrReply(decoded, 'interactive', content)
+  }
+
+  private async sendTextMessage(
+    decoded: LarkThreadId,
+    message: AdapterPostableMessage,
+  ): Promise<unknown> {
+    const { content, msgType } = renderMessage(message, this.converter)
+    return this.sendOrReply(decoded, msgType, content)
+  }
+
+  private async createStreamingCard(
+    decoded: LarkThreadId,
+  ): Promise<{ cardId: string; messageId: string }> {
+    const cardJson: Record<string, unknown> = {
+      body: {
+        elements: [{ content: '', element_id: STREAM_ELEMENT_ID, tag: 'markdown' }],
+      },
+      config: { streaming_mode: true, update_multi: true },
+      schema: '2.0',
+    }
+    const res = await this.api.createCard(JSON.stringify(cardJson))
+    const cardData = res as { data?: { card_id?: string } }
+    const cardId = cardData.data?.card_id ?? ''
+    const content = JSON.stringify({ data: { card_id: cardId }, type: 'card' })
+    const sendRes = await this.sendOrReply(decoded, 'interactive', content)
+    const msgData = sendRes as { data?: { message_id?: string } }
+    return { cardId, messageId: msgData.data?.message_id ?? '' }
+  }
+
   private async sendOrReply(
     decoded: LarkThreadId,
     msgType: string,
@@ -598,18 +651,6 @@ export default class LarkAdapter implements Adapter<LarkThreadId, LarkRawMessage
       raw,
       msg.mentions.map((mention) => ({ key: mention.key, name: mention.name })),
     )
-  }
-
-  private async throttledEdit(
-    threadId: string,
-    messageId: string,
-    state: { accumulated: string; lastEditTime: number },
-  ): Promise<void> {
-    const now = Date.now()
-    if (now - state.lastEditTime >= STREAM_THROTTLE_MS) {
-      await this.editMessage(threadId, messageId, state.accumulated)
-      state.lastEditTime = Date.now()
-    }
   }
 
   private itemToMessage(item: Record<string, unknown>, threadId: string): Message<LarkRawMessage> {
