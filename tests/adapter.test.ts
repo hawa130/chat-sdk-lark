@@ -16,6 +16,7 @@ const HTTP_BAD_REQUEST = 400
 const ONCE = 1
 const ONE_MESSAGE = 1
 const STREAM_CHUNK_COUNT = 3
+const MEMBER_COUNT_42 = 42
 const SEQ_1 = 1
 const SEQ_2 = 2
 const SEQ_3 = 3
@@ -536,16 +537,21 @@ describe('LarkAdapter', () => {
       expect(msg!.id).toBe('om_f1')
     })
 
-    it('fetchChannelInfo returns channel metadata', async () => {
+    it('fetchChannelInfo returns channel metadata with memberCount from user_count', async () => {
       server.use(
         tokenHandler,
         http.get(`${BASE}/open-apis/im/v1/chats/:id`, () =>
-          HttpResponse.json({ code: 0, data: { name: 'Channel X' } }),
+          HttpResponse.json({
+            code: 0,
+            data: { chat_mode: 'group', name: 'Channel X', user_count: '42' },
+          }),
         ),
       )
       const info = await adapter.fetchChannelInfo('oc_chat001')
       expect(info.id).toBe('oc_chat001')
       expect(info.name).toBe('Channel X')
+      expect(info.memberCount).toBe(MEMBER_COUNT_42)
+      expect(info.isDM).toBe(false)
     })
   })
 
@@ -691,7 +697,7 @@ describe('LarkAdapter', () => {
       )
       const threadId = adapter.encodeThreadId({ chatId: 'oc_chat001' })
       const result = await adapter.postEphemeral(threadId, 'ou_user1', 'secret msg')
-      expect(captured).toMatchObject({ chat_id: 'oc_chat001', user_id: 'ou_user1' })
+      expect(captured).toMatchObject({ chat_id: 'oc_chat001', open_id: 'ou_user1' })
       expect(result.usedFallback).toBe(false)
     })
   })

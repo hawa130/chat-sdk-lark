@@ -175,7 +175,7 @@ class LarkApiClient {
   async sendEphemeral(chatId: string, userId: string, content: string) {
     return this.call(() =>
       this.client.request({
-        data: { card: content, chat_id: chatId, msg_type: 'interactive', user_id: userId },
+        data: { card: content, chat_id: chatId, msg_type: 'interactive', open_id: userId },
         method: 'POST',
         url: '/open-apis/ephemeral/v1/send',
       }),

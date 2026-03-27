@@ -143,9 +143,32 @@ const chunkToText = (chunk: string | StreamChunk): string => {
   return ''
 }
 
-const getMemberCount = (data: { member_list?: unknown[] } | undefined): number | undefined => {
-  if (Array.isArray(data?.member_list)) {
-    return data.member_list.length
+const MIME_TO_LARK_FILE_TYPE: Record<string, string> = {
+  'application/msword': 'doc',
+  'application/pdf': 'pdf',
+  'application/vnd.ms-excel': 'xls',
+  'application/vnd.ms-powerpoint': 'ppt',
+  'application/vnd.openxmlformats-officedocument.presentationml.presentation': 'ppt',
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': 'xls',
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document': 'doc',
+  'audio/ogg': 'opus',
+  'audio/opus': 'opus',
+  'video/mp4': 'mp4',
+}
+
+const mimeToLarkFileType = (mime: string): string => {
+  if (MIME_TO_LARK_FILE_TYPE[mime]) {
+    return MIME_TO_LARK_FILE_TYPE[mime]
+  }
+  return 'stream'
+}
+
+const parseMemberCount = (
+  data: { bot_count?: string; user_count?: string } | undefined,
+): number | undefined => {
+  const count = Number(data?.user_count)
+  if (Number.isFinite(count)) {
+    return count
   }
   return undefined
 }
@@ -364,12 +387,12 @@ export default class LarkAdapter implements Adapter<LarkThreadId, LarkRawMessage
   async fetchChannelInfo(channelId: string): Promise<ChannelInfo> {
     const res = await this.api.getChatInfo(channelId)
     const data = res as {
-      data?: { chat_mode?: string; member_list?: unknown[]; name?: string }
+      data?: { bot_count?: string; chat_mode?: string; name?: string; user_count?: string }
     }
     return {
       id: channelId,
       isDM: data.data?.chat_mode === 'p2p',
-      memberCount: getMemberCount(data.data),
+      memberCount: parseMemberCount(data.data),
       metadata: { raw: data },
       name: data.data?.name,
     }
@@ -564,7 +587,7 @@ export default class LarkAdapter implements Adapter<LarkThreadId, LarkRawMessage
     file: FileUpload,
   ): Promise<unknown> {
     const mime = file.mimeType ?? ''
-    const uploadRes = await this.api.uploadFile(buf, file.filename, mime)
+    const uploadRes = await this.api.uploadFile(buf, file.filename, mimeToLarkFileType(mime))
     const uploadData = uploadRes as { data?: { file_key?: string } }
     const fileKey = uploadData.data?.file_key ?? ''
     return this.sendOrReply(decoded, 'file', JSON.stringify({ file_key: fileKey }))
