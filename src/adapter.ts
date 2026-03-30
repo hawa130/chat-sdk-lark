@@ -15,9 +15,20 @@ import type {
   ThreadInfo,
   WebhookOptions,
 } from 'chat'
-import type { LarkAdapterConfig, LarkMessageItem, LarkRawMessage, LarkThreadId } from './types.ts'
+import type {
+  LarkAdapterConfig,
+  LarkCardBody,
+  LarkFileType,
+  LarkMessageItem,
+  LarkRaw,
+  LarkRawMessage,
+  LarkTextContent,
+  LarkThreadId,
+  LarkWebhookBody,
+} from './types.ts'
 import type { PlatformName } from '@chat-adapter/shared'
 import { ValidationError, extractCard, extractFiles, toBuffer } from '@chat-adapter/shared'
+import type { EventHandles } from '@larksuiteoapi/node-sdk'
 import { EventDispatcher } from '@larksuiteoapi/node-sdk'
 import { Message } from 'chat'
 import DedupCache from './dedup-cache.ts'
@@ -25,6 +36,12 @@ import LarkApiClient from './api-client.ts'
 import LarkFormatConverter from './format-converter.ts'
 import bridgeWebhook from './event-bridge.ts'
 import cardMapper from './card-mapper.ts'
+
+/** Extract the first parameter type of an event handler from the SDK's EventHandles. */
+type EventData<TKey extends keyof EventHandles> =
+  NonNullable<EventHandles[TKey]> extends (data: infer TData, ...args: unknown[]) => unknown
+    ? TData
+    : never
 
 const ADAPTER_NAME = 'lark'
 const DEDUP_CAPACITY = 500
@@ -38,20 +55,6 @@ const FIRST_ITEM_INDEX = 0
 const HTTP_BAD_REQUEST = 400
 const HTTP_OK = 200
 const LAST_INDEX = -1
-
-/** Response shape from Lark message send/reply APIs. */
-interface LarkMessageResult {
-  code?: number
-  data?: { message_id?: string }
-  msg?: string
-}
-
-/** Response shape from Lark CardKit create API. */
-interface LarkCardResult {
-  code?: number
-  data?: { card_id: string }
-  msg?: string
-}
 
 const toBase64Url = (str: string): string => Buffer.from(str).toString('base64url')
 
@@ -93,16 +96,13 @@ const extractEmojiName = (emoji: EmojiValue | string): string => {
   return emoji.name
 }
 
-const extractEventId = (body: Record<string, unknown>): string | undefined => {
-  const header = body['header'] as Record<string, unknown> | undefined
-  return header?.['event_id'] as string | undefined
-}
+const extractEventId = (body: LarkWebhookBody): string | undefined => body.header?.event_id
 
 const extractText = (content: string): string => {
   try {
-    const parsed = JSON.parse(content) as Record<string, unknown>
+    const parsed = JSON.parse(content) as LarkTextContent
     if ('text' in parsed) {
-      return String(parsed['text'])
+      return parsed.text
     }
     return content
   } catch {
@@ -150,7 +150,7 @@ const chunkToText = (chunk: string | StreamChunk): string => {
   return ''
 }
 
-const MIME_TO_LARK_FILE_TYPE: Record<string, string> = {
+const MIME_TO_LARK_FILE_TYPE: Record<string, LarkFileType> = {
   'application/msword': 'doc',
   'application/pdf': 'pdf',
   'application/vnd.ms-excel': 'xls',
@@ -163,12 +163,7 @@ const MIME_TO_LARK_FILE_TYPE: Record<string, string> = {
   'video/mp4': 'mp4',
 }
 
-const mimeToLarkFileType = (mime: string): string => {
-  if (MIME_TO_LARK_FILE_TYPE[mime]) {
-    return MIME_TO_LARK_FILE_TYPE[mime]
-  }
-  return 'stream'
-}
+const mimeToLarkFileType = (mime: string): LarkFileType => MIME_TO_LARK_FILE_TYPE[mime] ?? 'stream'
 
 const parseMemberCount = (
   data: { bot_count?: string; user_count?: string } | undefined,
@@ -180,13 +175,13 @@ const parseMemberCount = (
   return undefined
 }
 
-export default class LarkAdapter implements Adapter<LarkThreadId, LarkRawMessage> {
+export default class LarkAdapter implements Adapter<LarkThreadId, LarkRaw> {
   readonly name = ADAPTER_NAME
-  readonly userName: string
 
   private chat!: ChatInstance
   private logger!: Logger
   private botOpenId = ''
+  private resolvedUserName: string
   private readonly config: LarkAdapterConfig
   private readonly api: LarkApiClient
   private readonly converter = new LarkFormatConverter()
@@ -194,9 +189,13 @@ export default class LarkAdapter implements Adapter<LarkThreadId, LarkRawMessage
   private readonly dispatcher: EventDispatcher
   private readonly dmCache = new Set<string>()
 
+  get userName(): string {
+    return this.resolvedUserName
+  }
+
   constructor(config: LarkAdapterConfig) {
     this.config = config
-    this.userName = config.userName ?? 'LarkBot'
+    this.resolvedUserName = config.userName ?? 'LarkBot'
     this.api = new LarkApiClient({
       appId: config.appId,
       appSecret: config.appSecret,
@@ -216,7 +215,7 @@ export default class LarkAdapter implements Adapter<LarkThreadId, LarkRawMessage
     const info = await this.api.getBotInfo()
     this.botOpenId = info.bot?.open_id ?? ''
     if (info.bot?.app_name && !this.config.userName) {
-      ;(this as { userName: string }).userName = info.bot.app_name
+      this.resolvedUserName = info.bot.app_name
     }
     this.logger.info('Initialized', { botOpenId: this.botOpenId })
   }
@@ -257,7 +256,7 @@ export default class LarkAdapter implements Adapter<LarkThreadId, LarkRawMessage
   // -- Webhook handling (7B) --
 
   async handleWebhook(request: Request, options?: WebhookOptions): Promise<Response> {
-    const body = await this.parseWebhookBody(request.clone() as Request)
+    const body = await this.parseWebhookBody(request.clone())
     if (!body) {
       return new Response('Invalid JSON', { status: HTTP_BAD_REQUEST })
     }
@@ -269,12 +268,12 @@ export default class LarkAdapter implements Adapter<LarkThreadId, LarkRawMessage
 
   // -- Message parsing (7C) --
 
-  parseMessage(raw: LarkRawMessage): Message<LarkRawMessage> {
+  parseMessage(raw: LarkRawMessage): Message<LarkRaw> {
     const msg = raw.message
     if (msg.chat_type === 'p2p') {
       this.dmCache.add(msg.chat_id)
     }
-    return new Message<LarkRawMessage>({
+    return new Message<LarkRaw>({
       attachments: [],
       author: buildAuthor(raw, this.botOpenId),
       formatted: this.converter.toAst(msg.content),
@@ -298,7 +297,7 @@ export default class LarkAdapter implements Adapter<LarkThreadId, LarkRawMessage
   async postMessage(
     threadId: string,
     message: AdapterPostableMessage,
-  ): Promise<RawMessage<LarkRawMessage>> {
+  ): Promise<RawMessage<LarkRaw>> {
     const decoded = this.decodeThreadId(threadId)
     const files = extractFiles(message)
     const fileResults = await Promise.all(
@@ -307,17 +306,19 @@ export default class LarkAdapter implements Adapter<LarkThreadId, LarkRawMessage
     const lastFileResult = fileResults.at(LAST_INDEX) ?? null
     const textResult = await this.sendMessageContent(decoded, message)
     const result = lastFileResult ?? textResult
-    return { id: result.data?.message_id ?? '', raw: result as unknown as LarkRawMessage, threadId }
+    const raw: LarkMessageItem = { message_id: result.data?.message_id }
+    return { id: raw.message_id ?? '', raw, threadId }
   }
 
   async editMessage(
     threadId: string,
     messageId: string,
     message: AdapterPostableMessage,
-  ): Promise<RawMessage<LarkRawMessage>> {
+  ): Promise<RawMessage<LarkRaw>> {
     const { content, msgType } = renderMessage(message, this.converter)
-    const result = await this.api.updateMessage(messageId, msgType, content)
-    return { id: messageId, raw: result as LarkRawMessage, threadId }
+    await this.api.updateMessage(messageId, msgType, content)
+    const raw: LarkMessageItem = { message_id: messageId }
+    return { id: messageId, raw, threadId }
   }
 
   async deleteMessage(_threadId: string, messageId: string): Promise<void> {
@@ -341,10 +342,7 @@ export default class LarkAdapter implements Adapter<LarkThreadId, LarkRawMessage
   ): Promise<void> {
     const emojiName = extractEmojiName(emoji)
     const res = await this.api.listReactions(messageId)
-    const data = res as {
-      data?: { items?: Array<{ reaction_id?: string; reaction_type?: { emoji_type?: string } }> }
-    }
-    const match = data.data?.items?.find((item) => item.reaction_type?.emoji_type === emojiName)
+    const match = res.data?.items?.find((item) => item.reaction_type?.emoji_type === emojiName)
     if (match?.reaction_id) {
       await this.api.removeReaction(messageId, match.reaction_id)
     }
@@ -352,39 +350,32 @@ export default class LarkAdapter implements Adapter<LarkThreadId, LarkRawMessage
 
   // -- Fetch methods (7F) --
 
-  async fetchMessages(
-    threadId: string,
-    options?: FetchOptions,
-  ): Promise<FetchResult<LarkRawMessage>> {
+  async fetchMessages(threadId: string, options?: FetchOptions): Promise<FetchResult<LarkRaw>> {
     const { chatId } = this.decodeThreadId(threadId)
     const res = await this.api.listMessages(chatId, options?.cursor, options?.limit)
-    const data = res as {
-      data?: { has_more?: boolean; items?: LarkMessageItem[]; page_token?: string }
-    }
-    const messages = (data.data?.items ?? []).map((item) => this.itemToMessage(item, threadId))
+    const items = res.data?.items ?? []
+    const messages = items.map((item) => this.itemToMessage(item, threadId))
     return {
       messages,
-      nextCursor: (data.data?.has_more && data.data.page_token) || undefined,
+      nextCursor: (res.data?.has_more && res.data.page_token) || undefined,
     }
   }
 
   async fetchThread(threadId: string): Promise<ThreadInfo> {
     const { chatId } = this.decodeThreadId(threadId)
     const res = await this.api.getChatInfo(chatId)
-    const data = res as { data?: { chat_mode?: string; name?: string } }
     return {
       channelId: chatId,
-      channelName: data.data?.name,
+      channelName: res.data?.name,
       id: threadId,
-      isDM: data.data?.chat_mode === 'p2p',
-      metadata: { raw: data },
+      isDM: res.data?.chat_mode === 'p2p',
+      metadata: { raw: res },
     }
   }
 
-  async fetchMessage(threadId: string, messageId: string): Promise<Message<LarkRawMessage> | null> {
+  async fetchMessage(threadId: string, messageId: string): Promise<Message<LarkRaw> | null> {
     const res = await this.api.getMessage(messageId)
-    const data = res as { data?: { items?: LarkMessageItem[] } }
-    const item = data.data?.items?.[FIRST_ITEM_INDEX]
+    const item = res.data?.items?.[FIRST_ITEM_INDEX]
     if (!item) {
       return null
     }
@@ -393,15 +384,12 @@ export default class LarkAdapter implements Adapter<LarkThreadId, LarkRawMessage
 
   async fetchChannelInfo(channelId: string): Promise<ChannelInfo> {
     const res = await this.api.getChatInfo(channelId)
-    const data = res as {
-      data?: { bot_count?: string; chat_mode?: string; name?: string; user_count?: string }
-    }
     return {
       id: channelId,
-      isDM: data.data?.chat_mode === 'p2p',
-      memberCount: parseMemberCount(data.data),
-      metadata: { raw: data },
-      name: data.data?.name,
+      isDM: res.data?.chat_mode === 'p2p',
+      memberCount: parseMemberCount(res.data),
+      metadata: { raw: res },
+      name: res.data?.name,
     }
   }
 
@@ -409,8 +397,7 @@ export default class LarkAdapter implements Adapter<LarkThreadId, LarkRawMessage
 
   async openDM(userId: string): Promise<string> {
     const res = await this.api.createP2PChat(userId)
-    const data = res as { data?: { chat_id?: string } }
-    const chatId = data.data?.chat_id ?? ''
+    const chatId = res.data?.chat_id ?? ''
     this.dmCache.add(chatId)
     return this.encodeThreadId({ chatId })
   }
@@ -434,7 +421,7 @@ export default class LarkAdapter implements Adapter<LarkThreadId, LarkRawMessage
   async stream(
     threadId: string,
     textStream: AsyncIterable<string | StreamChunk>,
-  ): Promise<RawMessage<LarkRawMessage>> {
+  ): Promise<RawMessage<LarkRaw>> {
     const { cardId, messageId } = await this.createStreamingCard(this.decodeThreadId(threadId))
     let sequence = INITIAL_SEQUENCE
     let accumulated = ''
@@ -457,7 +444,8 @@ export default class LarkAdapter implements Adapter<LarkThreadId, LarkRawMessage
       )
     }
 
-    return { id: messageId, raw: {} as LarkRawMessage, threadId }
+    const raw: LarkMessageItem = { message_id: messageId }
+    return { id: messageId, raw, threadId }
   }
 
   // -- Ephemeral (7H) --
@@ -466,58 +454,54 @@ export default class LarkAdapter implements Adapter<LarkThreadId, LarkRawMessage
     threadId: string,
     userId: string,
     message: AdapterPostableMessage,
-  ): Promise<EphemeralMessage<LarkRawMessage>> {
+  ): Promise<EphemeralMessage<LarkRaw>> {
     const { chatId } = this.decodeThreadId(threadId)
     const { content } = renderMessage(message, this.converter)
-    const result = await this.api.sendEphemeral(chatId, userId, content)
-    return { id: '', raw: result as LarkRawMessage, threadId, usedFallback: false }
+    await this.api.sendEphemeral(chatId, userId, content)
+    const raw: LarkMessageItem = {}
+    return { id: '', raw, threadId, usedFallback: false }
   }
 
   // -- Private helpers --
 
   private registerEventHandlers(): void {
     this.dispatcher.register({
-      'im.chat.member.bot.added_v1': (data: unknown) => {
+      'im.chat.member.bot.added_v1': (data) => {
         this.logger?.info?.('Bot added to chat', data)
       },
-      'im.message.reaction.created_v1': (data: unknown) => {
+      'im.message.reaction.created_v1': (data) => {
         this.handleReactionEvent(data, true)
       },
-      'im.message.reaction.deleted_v1': (data: unknown) => {
+      'im.message.reaction.deleted_v1': (data) => {
         this.handleReactionEvent(data, false)
       },
-      'im.message.receive_v1': (data: unknown) => {
+      'im.message.receive_v1': (data) => {
         this.handleMessageEvent(data)
       },
     })
   }
 
-  private handleMessageEvent(data: unknown): void {
-    // SDK v2 flattens header + event into top level (no nested .event)
-    const raw = data as LarkRawMessage
-    if (!raw?.message) {
+  private handleMessageEvent(data: EventData<'im.message.receive_v1'>): void {
+    if (!data?.message) {
       return
     }
-    const message = this.parseMessage(raw)
+    const message = this.parseMessage(data)
     this.chat.processMessage(this, message.threadId, message, {})
   }
 
-  private handleReactionEvent(data: unknown, added: boolean): void {
-    // SDK v2 flattens header + event into top level
-    const ev = data as {
-      message_id?: string
-      reaction_type?: { emoji_type?: string }
-      user_id?: { open_id?: string }
-    }
-    if (!ev?.message_id) {
+  private handleReactionEvent(
+    data: EventData<'im.message.reaction.created_v1'>,
+    added: boolean,
+  ): void {
+    if (!data?.message_id) {
       return
     }
-    const emojiType = ev.reaction_type?.emoji_type ?? ''
+    const emojiType = data.reaction_type?.emoji_type ?? ''
     this.chat.processReaction({
       adapter: this,
       added,
       emoji: { name: emojiType, toJSON: () => '', toString: () => '' },
-      messageId: ev.message_id,
+      messageId: data.message_id,
       raw: data,
       rawEmoji: emojiType,
       threadId: '',
@@ -525,15 +509,15 @@ export default class LarkAdapter implements Adapter<LarkThreadId, LarkRawMessage
         fullName: '',
         isBot: 'unknown' as const,
         isMe: false,
-        userId: ev.user_id?.open_id ?? '',
+        userId: data.user_id?.open_id ?? '',
         userName: '',
       },
     })
   }
 
-  private async parseWebhookBody(cloned: Request): Promise<Record<string, unknown> | null> {
+  private async parseWebhookBody(cloned: Request): Promise<LarkWebhookBody | null> {
     try {
-      return (await cloned.json()) as Record<string, unknown>
+      return (await cloned.json()) as LarkWebhookBody
     } catch {
       return null
     }
@@ -544,11 +528,7 @@ export default class LarkAdapter implements Adapter<LarkThreadId, LarkRawMessage
     return Response.json(result)
   }
 
-  private handleEvent(
-    body: Record<string, unknown>,
-    request: Request,
-    options?: WebhookOptions,
-  ): Response {
+  private handleEvent(body: LarkWebhookBody, request: Request, options?: WebhookOptions): Response {
     const eventId = extractEventId(body)
     if (eventId && this.dedup.has(eventId)) {
       return new Response('ok', { status: HTTP_OK })
@@ -560,11 +540,7 @@ export default class LarkAdapter implements Adapter<LarkThreadId, LarkRawMessage
     return new Response('ok', { status: HTTP_OK })
   }
 
-  private dispatchEvent(
-    body: Record<string, unknown>,
-    request: Request,
-    options?: WebhookOptions,
-  ): void {
+  private dispatchEvent(body: LarkWebhookBody, request: Request, options?: WebhookOptions): void {
     const bridgeRequest = new Request(request.url, {
       body: JSON.stringify(body),
       headers: request.headers,
@@ -581,33 +557,24 @@ export default class LarkAdapter implements Adapter<LarkThreadId, LarkRawMessage
     })
   }
 
-  private extractImageKey(uploadRes: unknown): string {
-    const data = uploadRes as { data?: { image_key?: string } }
-    return data.data?.image_key ?? ''
+  private extractImageKey(uploadRes: { image_key?: string } | null): string {
+    return uploadRes?.image_key ?? ''
   }
 
-  private async sendUploadedImage(decoded: LarkThreadId, buf: Buffer): Promise<LarkMessageResult> {
+  private async sendUploadedImage(decoded: LarkThreadId, buf: Buffer) {
     const uploadRes = await this.api.uploadImage(buf)
     const imageKey = this.extractImageKey(uploadRes)
     return this.sendOrReply(decoded, 'image', JSON.stringify({ image_key: imageKey }))
   }
 
-  private async sendUploadedFile(
-    decoded: LarkThreadId,
-    buf: Buffer,
-    file: FileUpload,
-  ): Promise<LarkMessageResult> {
+  private async sendUploadedFile(decoded: LarkThreadId, buf: Buffer, file: FileUpload) {
     const mime = file.mimeType ?? ''
     const uploadRes = await this.api.uploadFile(buf, file.filename, mimeToLarkFileType(mime))
-    const uploadData = uploadRes as { data?: { file_key?: string } }
-    const fileKey = uploadData.data?.file_key ?? ''
+    const fileKey = uploadRes?.file_key ?? ''
     return this.sendOrReply(decoded, 'file', JSON.stringify({ file_key: fileKey }))
   }
 
-  private async uploadAndSendFile(
-    decoded: LarkThreadId,
-    file: FileUpload,
-  ): Promise<LarkMessageResult | null> {
+  private async uploadAndSendFile(decoded: LarkThreadId, file: FileUpload) {
     const buf = await toBuffer(file.data, { platform: ADAPTER_NAME as PlatformName })
     if (!buf) {
       return null
@@ -619,14 +586,11 @@ export default class LarkAdapter implements Adapter<LarkThreadId, LarkRawMessage
     return this.sendUploadedFile(decoded, buf, file)
   }
 
-  private async sendMessageContent(
-    decoded: LarkThreadId,
-    message: AdapterPostableMessage,
-  ): Promise<LarkMessageResult> {
+  private async sendMessageContent(decoded: LarkThreadId, message: AdapterPostableMessage) {
     const card = extractCard(message)
     if (card) {
       const cardCopy = structuredClone(card)
-      await this.uploadCardImages(cardCopy as Record<string, unknown>)
+      await this.uploadCardImages(cardCopy)
       const cardJson = cardMapper.cardToLarkInteractive(cardCopy)
       return this.sendCardMessage(decoded, cardJson)
     }
@@ -640,7 +604,10 @@ export default class LarkAdapter implements Adapter<LarkThreadId, LarkRawMessage
     return this.extractImageKey(uploadRes) || null
   }
 
-  private async uploadUrlToImageKey(node: Record<string, unknown>, field: string): Promise<void> {
+  private async uploadUrlToImageKey<TNode extends Record<string, unknown>>(
+    node: TNode,
+    field: string & keyof TNode,
+  ): Promise<void> {
     const url = node[field]
     if (typeof url !== 'string' || !isHttpUrl(url)) {
       return
@@ -648,40 +615,39 @@ export default class LarkAdapter implements Adapter<LarkThreadId, LarkRawMessage
     try {
       const key = await this.fetchAndUploadImage(url)
       if (key) {
-        node[field] = key
+        ;(node as Record<string, unknown>)[field] = key
       }
     } catch {
       this.logger?.warn?.('Failed to upload card image', { field, url })
     }
   }
 
-  private async uploadCardImages(node: Record<string, unknown>, isRoot = true): Promise<void> {
-    if (node['type'] === 'image') {
+  private async uploadCardImages(
+    node: { children?: unknown[]; imageUrl?: string; type?: string; url?: string },
+    isRoot = true,
+  ): Promise<void> {
+    if (node.type === 'image') {
       await this.uploadUrlToImageKey(node, 'url')
     }
     if (isRoot) {
       await this.uploadUrlToImageKey(node, 'imageUrl')
     }
-    const children = node['children'] as Array<Record<string, unknown>> | undefined
-    if (children) {
-      await Promise.all(children.map((child) => this.uploadCardImages(child, false)))
+    if (node.children) {
+      type CardNode = typeof node
+      await Promise.all(
+        node.children.map((child) => this.uploadCardImages(child as CardNode, false)),
+      )
     }
   }
 
-  private async sendCardMessage(
-    decoded: LarkThreadId,
-    cardJson: Record<string, unknown>,
-  ): Promise<LarkMessageResult> {
-    const res = (await this.api.createCard(JSON.stringify(cardJson))) as LarkCardResult
+  private async sendCardMessage(decoded: LarkThreadId, cardJson: LarkCardBody) {
+    const res = await this.api.createCard(JSON.stringify(cardJson))
     const cardId = res.data?.card_id ?? ''
     const content = JSON.stringify({ data: { card_id: cardId }, type: 'card' })
     return this.sendOrReply(decoded, 'interactive', content)
   }
 
-  private async sendTextMessage(
-    decoded: LarkThreadId,
-    message: AdapterPostableMessage,
-  ): Promise<LarkMessageResult> {
+  private async sendTextMessage(decoded: LarkThreadId, message: AdapterPostableMessage) {
     const { content, msgType } = renderMessage(message, this.converter)
     return this.sendOrReply(decoded, msgType, content)
   }
@@ -689,25 +655,21 @@ export default class LarkAdapter implements Adapter<LarkThreadId, LarkRawMessage
   private async createStreamingCard(
     decoded: LarkThreadId,
   ): Promise<{ cardId: string; messageId: string }> {
-    const cardJson: Record<string, unknown> = {
+    const cardJson: LarkCardBody = {
       body: {
         elements: [{ content: '', element_id: STREAM_ELEMENT_ID, tag: 'markdown' }],
       },
       config: { streaming_mode: true, update_multi: true },
       schema: '2.0',
     }
-    const res = (await this.api.createCard(JSON.stringify(cardJson))) as LarkCardResult
+    const res = await this.api.createCard(JSON.stringify(cardJson))
     const cardId = res.data?.card_id ?? ''
     const content = JSON.stringify({ data: { card_id: cardId }, type: 'card' })
     const sendRes = await this.sendOrReply(decoded, 'interactive', content)
     return { cardId, messageId: sendRes.data?.message_id ?? '' }
   }
 
-  private async sendOrReply(
-    decoded: LarkThreadId,
-    msgType: string,
-    content: string,
-  ): Promise<LarkMessageResult> {
+  private async sendOrReply(decoded: LarkThreadId, msgType: string, content: string) {
     if (decoded.rootMessageId) {
       return this.api.replyMessage(decoded.rootMessageId, msgType, content)
     }
@@ -725,9 +687,9 @@ export default class LarkAdapter implements Adapter<LarkThreadId, LarkRawMessage
     )
   }
 
-  private itemToMessage(item: LarkMessageItem, threadId: string): Message<LarkRawMessage> {
+  private itemToMessage(item: LarkMessageItem, threadId: string): Message<LarkRaw> {
     const content = item.body?.content ?? ''
-    return new Message<LarkRawMessage>({
+    return new Message<LarkRaw>({
       attachments: [],
       author: unknownAuthor(),
       formatted: this.converter.toAst(content),
@@ -736,7 +698,7 @@ export default class LarkAdapter implements Adapter<LarkThreadId, LarkRawMessage
         dateSent: new Date(Number(item.create_time ?? '0')),
         edited: false,
       },
-      raw: item as unknown as LarkRawMessage,
+      raw: item,
       text: extractText(content),
       threadId,
     })

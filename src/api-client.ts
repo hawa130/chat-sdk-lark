@@ -1,5 +1,5 @@
 import { AppType, Client, Domain } from '@larksuiteoapi/node-sdk'
-import type { LarkAdapterConfig } from './types.ts'
+import type { LarkAdapterConfig, LarkFileType, LarkSdkError } from './types.ts'
 
 const HTTP_RATE_LIMIT = 429
 const HTTP_UNAUTHORIZED = 401
@@ -13,20 +13,10 @@ const DEFAULT_PAGE_SIZE = 20
 const makeError = (message: string, name: string): Error =>
   Object.assign(new Error(message), { name })
 
-const extractStatus = (err: Record<string, unknown>): number | undefined => {
-  const response = err['response'] as Record<string, unknown> | undefined
-  return (
-    (response?.['status'] as number | undefined) ??
-    (err['httpCode'] as number | undefined) ??
-    (err['status'] as number | undefined)
-  )
-}
+const extractStatus = (err: LarkSdkError): number | undefined =>
+  err.response?.status ?? err.httpCode ?? err.status
 
-const extractCode = (err: Record<string, unknown>): number | undefined => {
-  const response = err['response'] as Record<string, unknown> | undefined
-  const data = response?.['data'] as Record<string, unknown> | undefined
-  return (err['code'] as number | undefined) ?? (data?.['code'] as number | undefined)
-}
+const extractCode = (err: LarkSdkError): number | undefined => err.code ?? err.response?.data?.code
 
 const isAuthError = (status: number | undefined, code: number | undefined): boolean =>
   status === HTTP_UNAUTHORIZED ||
@@ -35,7 +25,7 @@ const isAuthError = (status: number | undefined, code: number | undefined): bool
   code === LARK_AUTH_CODE_B
 
 const mapError = (error: unknown): Error => {
-  const err = error as Record<string, unknown>
+  const err = error as LarkSdkError
   const status = extractStatus(err)
   const code = extractCode(err)
   const mapped =
@@ -153,14 +143,10 @@ class LarkApiClient {
     )
   }
 
-  async uploadFile(file: Buffer, fileName: string, fileType: string) {
+  async uploadFile(file: Buffer, fileName: string, fileType: LarkFileType) {
     return this.call(() =>
       this.client.im.file.create({
-        data: {
-          file,
-          file_name: fileName,
-          file_type: fileType as 'opus' | 'mp4' | 'pdf' | 'doc' | 'xls' | 'ppt' | 'stream',
-        },
+        data: { file, file_name: fileName, file_type: fileType },
       }),
     )
   }

@@ -1,12 +1,12 @@
 import type { Domain } from '@larksuiteoapi/node-sdk'
 
 /** Thread identifier for Lark — encodes a chat and optional root message (for thread replies). */
-export interface LarkThreadId {
+interface LarkThreadId {
   chatId: string
   rootMessageId?: string
 }
 
-export interface LarkAdapterConfig {
+interface LarkAdapterConfig {
   /** Lark app ID (or env LARK_APP_ID) */
   appId: string
   /** Lark app secret (or env LARK_APP_SECRET) */
@@ -24,7 +24,7 @@ export interface LarkAdapterConfig {
 }
 
 /** Raw event data from im.message.receive_v1, as delivered by the SDK's EventDispatcher. */
-export interface LarkRawMessage {
+interface LarkRawMessage {
   event_id?: string
   sender: {
     sender_id?: {
@@ -56,7 +56,7 @@ export interface LarkRawMessage {
 }
 
 /** Message item from Lark REST API (im/v1/messages list/get). */
-export interface LarkMessageItem {
+interface LarkMessageItem {
   message_id?: string
   root_id?: string
   parent_id?: string
@@ -87,7 +87,195 @@ export interface LarkMessageItem {
 }
 
 /** Tracks a CardKit card entity for streaming and updates. */
-export interface CardKitCard {
+interface CardKitCard {
   cardId: string
   elementId: string
+}
+
+/**
+ * Union of all raw platform data that can appear in Message.raw or RawMessage.raw.
+ *
+ * - `LarkRawMessage` — webhook event payload from im.message.receive_v1
+ * - `LarkMessageItem` — REST API response item from message get/list/create/reply/update
+ */
+type LarkRaw = LarkRawMessage | LarkMessageItem
+
+/** File types accepted by Lark's im/v1/files upload API. */
+type LarkFileType = 'doc' | 'mp4' | 'opus' | 'pdf' | 'ppt' | 'stream' | 'xls'
+
+// ---------------------------------------------------------------------------
+// Card JSON 2.0 types (based on official Lark card component docs)
+// ---------------------------------------------------------------------------
+
+interface LarkPlainText {
+  tag: 'plain_text'
+  content: string
+}
+
+interface LarkMarkdownElement {
+  tag: 'markdown'
+  content: string | undefined
+  element_id: string
+  text_align?: 'left' | 'center' | 'right'
+}
+
+interface LarkHrElement {
+  tag: 'hr'
+  element_id: string
+}
+
+interface LarkImgElement {
+  tag: 'img'
+  img_key: string | undefined
+  alt: LarkPlainText
+  element_id: string
+}
+
+interface LarkButtonElement {
+  tag: 'button'
+  text: LarkPlainText
+  type: string
+  element_id: string
+  behaviors: LarkBehavior[]
+  disabled?: boolean
+}
+
+interface LarkSelectElement {
+  tag: 'select_static'
+  element_id: string
+  options: Array<{ text: LarkPlainText; value: string }>
+  behaviors: LarkBehavior[]
+  placeholder?: LarkPlainText
+  initial_option?: string
+}
+
+interface LarkColumn {
+  tag: 'column'
+  elements: LarkCardElement[]
+  width: string
+  weight?: number
+  vertical_align?: string
+}
+
+interface LarkColumnSetElement {
+  tag: 'column_set'
+  columns: LarkColumn[]
+  flex_mode?: string
+  background_style?: string
+}
+
+interface LarkTableElement {
+  tag: 'table'
+  element_id: string
+  columns: Array<{
+    data_type: 'text'
+    display_name: string
+    horizontal_align: string
+    name: string
+  }>
+  rows: Array<Record<string, string>>
+  header_style?: { bold: boolean; text_align: string }
+  page_size?: number
+}
+
+type LarkCardElement =
+  | LarkButtonElement
+  | LarkColumnSetElement
+  | LarkHrElement
+  | LarkImgElement
+  | LarkMarkdownElement
+  | LarkSelectElement
+  | LarkTableElement
+
+type LarkBehavior =
+  | { type: 'callback'; value: Record<string, string> }
+  | { type: 'open_url'; default_url: string }
+
+interface LarkCardHeader {
+  title: LarkPlainText
+  subtitle?: LarkPlainText
+  template: string
+}
+
+interface LarkCardBody {
+  schema: '2.0'
+  config: { streaming_mode?: boolean; update_multi: true }
+  header?: LarkCardHeader
+  body: { elements: LarkCardElement[] }
+}
+
+// ---------------------------------------------------------------------------
+// Message content types (JSON-parsed message body)
+// ---------------------------------------------------------------------------
+
+interface LarkTextContent {
+  text: string
+}
+
+interface LarkPostContent {
+  post: Record<
+    string,
+    { content?: Array<Array<{ tag: string; [key: string]: unknown }>>; title?: string }
+  >
+}
+
+interface LarkInteractiveContent {
+  body: { elements: Array<{ tag: string; content?: string }> }
+}
+
+type LarkMessageContent = LarkInteractiveContent | LarkPostContent | LarkTextContent
+
+// ---------------------------------------------------------------------------
+// Webhook event envelope (v2 schema)
+// ---------------------------------------------------------------------------
+
+interface LarkWebhookBody {
+  header?: { event_id?: string; event_type?: string }
+  type?: string
+}
+
+// ---------------------------------------------------------------------------
+// SDK error shape (Axios-based)
+// ---------------------------------------------------------------------------
+
+interface LarkSdkError {
+  code?: number
+  httpCode?: number
+  message?: string
+  response?: {
+    data?: { code?: number; msg?: string }
+    status?: number
+  }
+  status?: number
+}
+
+// ---------------------------------------------------------------------------
+// Exports
+// ---------------------------------------------------------------------------
+
+export type {
+  CardKitCard,
+  LarkAdapterConfig,
+  LarkBehavior,
+  LarkButtonElement,
+  LarkCardBody,
+  LarkCardElement,
+  LarkCardHeader,
+  LarkColumnSetElement,
+  LarkFileType,
+  LarkHrElement,
+  LarkImgElement,
+  LarkInteractiveContent,
+  LarkMarkdownElement,
+  LarkMessageContent,
+  LarkMessageItem,
+  LarkPostContent,
+  LarkRaw,
+  LarkRawMessage,
+  LarkSdkError,
+  LarkSelectElement,
+  LarkTableElement,
+  LarkTextContent,
+  LarkThreadId,
+  LarkWebhookBody,
 }

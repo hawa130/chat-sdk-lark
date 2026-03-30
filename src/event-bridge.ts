@@ -1,9 +1,10 @@
+import type { LarkWebhookBody } from './types.ts'
 import { EventDispatcher, generateChallenge } from '@larksuiteoapi/node-sdk'
 
-const parseBody = async (request: Request): Promise<Record<string, unknown>> => {
+const parseBody = async (request: Request): Promise<LarkWebhookBody> => {
   const body = await request.text()
   try {
-    return JSON.parse(body) as Record<string, unknown>
+    return JSON.parse(body) as LarkWebhookBody
   } catch {
     throw new Error('Invalid JSON body')
   }

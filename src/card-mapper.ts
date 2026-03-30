@@ -1,4 +1,17 @@
 import { customAlphabet } from 'nanoid'
+import type {
+  LarkBehavior,
+  LarkButtonElement,
+  LarkCardBody,
+  LarkCardElement,
+  LarkCardHeader,
+  LarkColumnSetElement,
+  LarkHrElement,
+  LarkImgElement,
+  LarkMarkdownElement,
+  LarkSelectElement,
+  LarkTableElement,
+} from './types.ts'
 
 /** Minimal shapes for card elements (JSX components, not importable as types). */
 interface CardChild {
@@ -22,8 +35,6 @@ interface CardChild {
   url?: string
   value?: unknown
 }
-
-type LarkElement = Record<string, unknown>
 
 const NANO_ID_SIZE = 12
 const MIN_PAGE_SIZE = 1
@@ -54,8 +65,8 @@ const buildCallbackValue = (btn: CardChild): Record<string, string> => {
   return val
 }
 
-const mapButton = (btn: CardChild, behaviors?: LarkElement[]): LarkElement => {
-  const el: LarkElement = {
+const mapButton = (btn: CardChild, behaviors?: LarkBehavior[]): LarkButtonElement => {
+  const el: LarkButtonElement = {
     behaviors: behaviors ?? [{ type: 'callback', value: buildCallbackValue(btn) }],
     element_id: nextElementId(),
     tag: 'button',
@@ -63,32 +74,32 @@ const mapButton = (btn: CardChild, behaviors?: LarkElement[]): LarkElement => {
     type: buttonType(btn.style),
   }
   if (btn.disabled) {
-    el['disabled'] = true
+    el.disabled = true
   }
   return el
 }
 
-const mapSelect = (child: CardChild): LarkElement => {
+const mapSelect = (child: CardChild): LarkSelectElement => {
   const placeholderText = child.placeholder ?? child.label
-  const el: LarkElement = {
+  const el: LarkSelectElement = {
     behaviors: [{ type: 'callback', value: { id: child.id ?? '' } }],
     element_id: nextElementId(),
     options: (child.options ?? []).map((opt) => ({
-      text: { content: opt.label ?? '', tag: 'plain_text' },
+      text: { content: opt.label ?? '', tag: 'plain_text' as const },
       value: String(opt.value ?? ''),
     })),
     tag: 'select_static',
   }
   if (placeholderText) {
-    el['placeholder'] = { content: placeholderText, tag: 'plain_text' }
+    el.placeholder = { content: placeholderText, tag: 'plain_text' }
   }
   if (child.initialOption) {
-    el['initial_option'] = child.initialOption
+    el.initial_option = child.initialOption
   }
   return el
 }
 
-const mapActionChild = (child: CardChild): LarkElement | null => {
+const mapActionChild = (child: CardChild): LarkCardElement | null => {
   if (child.type === 'link-button') {
     return mapButton(child, [{ default_url: child.url ?? '', type: 'open_url' }])
   }
@@ -98,7 +109,7 @@ const mapActionChild = (child: CardChild): LarkElement | null => {
   return mapButton(child)
 }
 
-const mapFields = (child: CardChild): LarkElement[] =>
+const mapFields = (child: CardChild): LarkColumnSetElement[] =>
   (child.children ?? []).map((field) => ({
     background_style: 'default',
     columns: [
@@ -107,10 +118,10 @@ const mapFields = (child: CardChild): LarkElement[] =>
           {
             content: `**${field.label ?? ''}**`,
             element_id: nextElementId(),
-            tag: 'markdown',
+            tag: 'markdown' as const,
           },
         ],
-        tag: 'column',
+        tag: 'column' as const,
         vertical_align: 'top',
         weight: 1,
         width: 'weighted',
@@ -120,21 +131,21 @@ const mapFields = (child: CardChild): LarkElement[] =>
           {
             content: String(field.value ?? ''),
             element_id: nextElementId(),
-            tag: 'markdown',
-            text_align: 'right',
+            tag: 'markdown' as const,
+            text_align: 'right' as const,
           },
         ],
-        tag: 'column',
+        tag: 'column' as const,
         vertical_align: 'top',
         weight: 1,
         width: 'weighted',
       },
     ],
     flex_mode: 'none',
-    tag: 'column_set',
+    tag: 'column_set' as const,
   }))
 
-const mapTable = (child: CardChild): LarkElement | null => {
+const mapTable = (child: CardChild): LarkTableElement | null => {
   if (!child.headers?.length) {
     return null
   }
@@ -157,10 +168,10 @@ const mapTable = (child: CardChild): LarkElement | null => {
   }
 }
 
-const mapActions = (child: CardChild): LarkElement | null => {
+const mapActions = (child: CardChild): LarkColumnSetElement | null => {
   const items = (child.children ?? [])
     .map((actionChild) => mapActionChild(actionChild))
-    .filter((item): item is LarkElement => item != null)
+    .filter((item): item is LarkCardElement => item != null)
   if (!items.length) {
     return null
   }
@@ -168,7 +179,7 @@ const mapActions = (child: CardChild): LarkElement | null => {
     background_style: 'default',
     columns: items.map((item) => ({
       elements: [item],
-      tag: 'column',
+      tag: 'column' as const,
       vertical_align: 'top',
       weight: 1,
       width: 'auto',
@@ -178,7 +189,7 @@ const mapActions = (child: CardChild): LarkElement | null => {
   }
 }
 
-const flatMapChildren = (children: CardChild[]): LarkElement[] =>
+const flatMapChildren = (children: CardChild[]): LarkCardElement[] =>
   children.flatMap((ch) => {
     const result = mapChild(ch)
     if (Array.isArray(result)) {
@@ -190,25 +201,29 @@ const flatMapChildren = (children: CardChild[]): LarkElement[] =>
     return []
   })
 
-const mapChild = (child: CardChild): LarkElement | LarkElement[] | null => {
+const mapChild = (child: CardChild): LarkCardElement | LarkCardElement[] | null => {
   switch (child.type) {
     case 'text':
-      return { content: child.content, element_id: nextElementId(), tag: 'markdown' }
+      return {
+        content: child.content,
+        element_id: nextElementId(),
+        tag: 'markdown',
+      } satisfies LarkMarkdownElement
     case 'divider':
-      return { element_id: nextElementId(), tag: 'hr' }
+      return { element_id: nextElementId(), tag: 'hr' } satisfies LarkHrElement
     case 'image':
       return {
         alt: { content: child.alt ?? '', tag: 'plain_text' },
         element_id: nextElementId(),
         img_key: child.url,
         tag: 'img',
-      }
+      } satisfies LarkImgElement
     case 'link':
       return {
         content: `[${child.label ?? ''}](${child.url ?? ''})`,
         element_id: nextElementId(),
         tag: 'markdown',
-      }
+      } satisfies LarkMarkdownElement
     case 'fields':
       return mapFields(child)
     case 'table':
@@ -218,15 +233,20 @@ const mapChild = (child: CardChild): LarkElement | LarkElement[] | null => {
     case 'section':
       return flatMapChildren(child.children ?? [])
     default: {
-      if ('content' in child && child.content) {
-        return { content: child.content as string, element_id: nextElementId(), tag: 'markdown' }
+      const { content } = child
+      if (content) {
+        return {
+          content,
+          element_id: nextElementId(),
+          tag: 'markdown',
+        } satisfies LarkMarkdownElement
       }
       return null
     }
   }
 }
 
-const cardToLarkInteractive = (card: CardChild): Record<string, unknown> => {
+const cardToLarkInteractive = (card: CardChild): LarkCardBody => {
   const elements = flatMapChildren(card.children ?? [])
 
   if (card.imageUrl) {
@@ -238,20 +258,20 @@ const cardToLarkInteractive = (card: CardChild): Record<string, unknown> => {
     })
   }
 
-  const result: Record<string, unknown> = {
+  const result: LarkCardBody = {
     body: { elements },
     config: { update_multi: true },
     schema: '2.0',
   }
   if (card.title) {
-    const header: Record<string, unknown> = {
+    const header: LarkCardHeader = {
       template: 'blue',
       title: { content: card.title, tag: 'plain_text' },
     }
     if (card.subtitle) {
-      header['subtitle'] = { content: card.subtitle, tag: 'plain_text' }
+      header.subtitle = { content: card.subtitle, tag: 'plain_text' }
     }
-    result['header'] = header
+    result.header = header
   }
   return result
 }
