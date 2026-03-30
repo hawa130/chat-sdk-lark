@@ -57,13 +57,8 @@ const toBase64Url = (str: string): string => Buffer.from(str).toString('base64ur
 
 const fromBase64Url = (str: string): string => Buffer.from(str, 'base64url').toString()
 
-const renderCardMessage = (message: AdapterPostableMessage): Record<string, unknown> | null => {
-  const card = extractCard(message)
-  if (!card) {
-    return null
-  }
-  return cardMapper.cardToLarkInteractive(card)
-}
+const isHttpUrl = (value: string): boolean =>
+  value.startsWith('http://') || value.startsWith('https://')
 
 const renderObjectMessage = (
   message: AdapterPostableMessage,
@@ -624,11 +619,47 @@ export default class LarkAdapter implements Adapter<LarkThreadId, LarkRawMessage
     decoded: LarkThreadId,
     message: AdapterPostableMessage,
   ): Promise<LarkMessageResult> {
-    const cardJson = renderCardMessage(message)
-    if (cardJson) {
+    const card = extractCard(message)
+    if (card) {
+      await this.uploadCardImages(card as Record<string, unknown>)
+      const cardJson = cardMapper.cardToLarkInteractive(card)
       return this.sendCardMessage(decoded, cardJson)
     }
     return this.sendTextMessage(decoded, message)
+  }
+
+  private async fetchAndUploadImage(url: string): Promise<string | null> {
+    const response = await fetch(url)
+    const buf = Buffer.from(await response.arrayBuffer())
+    const uploadRes = await this.api.uploadImage(buf)
+    const data = uploadRes as { data?: { image_key?: string } }
+    return data.data?.image_key ?? null
+  }
+
+  private async uploadUrlToImageKey(node: Record<string, unknown>, field: string): Promise<void> {
+    const url = node[field]
+    if (typeof url !== 'string' || !isHttpUrl(url)) {
+      return
+    }
+    try {
+      const key = await this.fetchAndUploadImage(url)
+      if (key) {
+        node[field] = key
+      }
+    } catch {
+      this.logger?.warn?.('Failed to upload card image', { field, url })
+    }
+  }
+
+  private async uploadCardImages(node: Record<string, unknown>): Promise<void> {
+    if (node['type'] === 'image') {
+      await this.uploadUrlToImageKey(node, 'url')
+    }
+    await this.uploadUrlToImageKey(node, 'imageUrl')
+    const children = node['children'] as Array<Record<string, unknown>> | undefined
+    if (children) {
+      await Promise.all(children.map((child) => this.uploadCardImages(child)))
+    }
   }
 
   private async sendCardMessage(
