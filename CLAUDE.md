@@ -10,7 +10,7 @@ Keep APIs small, behavior explicit, and naming clear. Avoid cleverness unless it
 
 ## Project Overview
 
-`chat-adapter-lark` — a Chat SDK adapter for Lark (飞书). See `docs/lark-adapter-plan.md` for architecture details, design decisions, and the full development roadmap. Consult that file before starting any implementation task.
+`chat-adapter-lark` — a Chat SDK adapter for Lark (飞书).
 
 ## Commands
 
