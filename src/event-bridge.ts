@@ -10,11 +10,7 @@ const parseBody = async (request: Request): Promise<LarkWebhookBody> => {
   }
 }
 
-/**
- * Bridges a standard Request to the Lark SDK's EventDispatcher.
- * Follows the SDK's adaptDefault pattern: headers on prototype, body data as own properties.
- * Handles URL verification challenges before forwarding to the dispatcher.
- */
+/** Follows the SDK's adaptDefault pattern: headers on prototype, body data as own properties. */
 const bridgeWebhook = async (request: Request, dispatcher: EventDispatcher): Promise<unknown> => {
   const data = await parseBody(request)
 

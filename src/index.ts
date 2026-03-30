@@ -1,5 +1,3 @@
-// Public API
-
 export type { LarkThreadId, LarkAdapterConfig, LarkRawMessage, LarkRaw } from './types.ts'
 export { default as LarkApiClient } from './api-client.ts'
 export { default as LarkFormatConverter } from './format-converter.ts'

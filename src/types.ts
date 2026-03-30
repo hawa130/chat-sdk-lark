@@ -1,6 +1,5 @@
 import type { Domain } from '@larksuiteoapi/node-sdk'
 
-/** Thread identifier for Lark — encodes a chat and optional root message (for thread replies). */
 interface LarkThreadId {
   chatId: string
   rootMessageId?: string
@@ -86,7 +85,6 @@ interface LarkMessageItem {
   upper_message_id?: string
 }
 
-/** Tracks a CardKit card entity for streaming and updates. */
 interface CardKitCard {
   cardId: string
   elementId: string
@@ -100,7 +98,6 @@ interface CardKitCard {
  */
 type LarkRaw = LarkRawMessage | LarkMessageItem
 
-/** File types accepted by Lark's im/v1/files upload API. */
 type LarkFileType = 'doc' | 'mp4' | 'opus' | 'pdf' | 'ppt' | 'stream' | 'xls'
 
 // ---------------------------------------------------------------------------

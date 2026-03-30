@@ -1,4 +1,3 @@
-/** FIFO dedup cache with fixed capacity. Used to deduplicate Lark event re-deliveries. */
 export default class DedupCache {
   private readonly capacity: number
   private readonly set = new Set<string>()
