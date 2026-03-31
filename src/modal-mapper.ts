@@ -26,7 +26,7 @@ interface ModalChild {
   options?: Array<{ label: string; value: string }>
   placeholder?: string
   type: string
-  value?: unknown
+  value?: string
 }
 
 interface ModalInput {

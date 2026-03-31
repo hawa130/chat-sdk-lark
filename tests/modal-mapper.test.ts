@@ -1,6 +1,10 @@
-import { describe, expect, it } from 'vitest'
+import { beforeEach, describe, expect, it } from 'vitest'
 import { modalMapper } from '../src/modal-mapper.ts'
 import type { LarkCardBody, LarkFormElement } from '../src/types.ts'
+
+beforeEach(() => {
+  modalMapper.resetIdCounter()
+})
 
 const findForm = (card: LarkCardBody): LarkFormElement =>
   card.body.elements.find((el) => el.tag === 'form') as LarkFormElement

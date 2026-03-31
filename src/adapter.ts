@@ -518,7 +518,7 @@ export class LarkAdapter implements Adapter<LarkThreadId, LarkRaw> {
     if (!chatId) {
       throw new ValidationError(ADAPTER_NAME, 'Invalid triggerId: missing chatId')
     }
-    const cardJson = modalMapper.modalToLarkCard(modal as unknown as ModalInput, contextId ?? '')
+    const cardJson = modalMapper.modalToLarkCard(modal as ModalInput, contextId ?? '')
     const decoded: LarkThreadId = { chatId }
     const res = await this.sendCardMessage(decoded, cardJson)
     const messageId = res.data?.message_id ?? ''
@@ -727,7 +727,8 @@ export class LarkAdapter implements Adapter<LarkThreadId, LarkRaw> {
     const values: Record<string, string> = {}
     if (action.form_value) {
       for (const [key, val] of Object.entries(action.form_value)) {
-        values[key] = Array.isArray(val) ? val.join(', ') : String(val)
+        // Multi-select arrays are JSON-stringified since Chat SDK values are Record<string, string>
+        values[key] = Array.isArray(val) ? JSON.stringify(val) : String(val)
       }
     }
     const user = { fullName: '', isBot: false as const, isMe: false, userId, userName: '' }
@@ -748,7 +749,7 @@ export class LarkAdapter implements Adapter<LarkThreadId, LarkRaw> {
       )
       .then((response) => {
         if (response) {
-          this.handleModalResponse(response, messageId, chatId)
+          this.handleModalResponse(response, messageId, chatId, contextId ?? '')
         }
         return undefined
       })
@@ -808,7 +809,12 @@ export class LarkAdapter implements Adapter<LarkThreadId, LarkRaw> {
     )
   }
 
-  private handleModalResponse(response: ModalResponse, messageId: string, chatId: string): void {
+  private handleModalResponse(
+    response: ModalResponse,
+    messageId: string,
+    chatId: string,
+    contextId: string,
+  ): void {
     if (!response || response.action === 'close') {
       return
     }
@@ -837,7 +843,7 @@ export class LarkAdapter implements Adapter<LarkThreadId, LarkRaw> {
     }
 
     if (response.action === 'update') {
-      const cardJson = modalMapper.modalToLarkCard(response.modal as unknown as ModalInput, '')
+      const cardJson = modalMapper.modalToLarkCard(response.modal as ModalInput, contextId)
       void this.api.patchCard(messageId, JSON.stringify(cardJson)).catch((err: unknown) => {
         this.logger?.error?.('Failed to update modal card', err)
       })
@@ -845,7 +851,7 @@ export class LarkAdapter implements Adapter<LarkThreadId, LarkRaw> {
     }
 
     if (response.action === 'push') {
-      const cardJson = modalMapper.modalToLarkCard(response.modal as unknown as ModalInput, '')
+      const cardJson = modalMapper.modalToLarkCard(response.modal as ModalInput, contextId)
       const decoded: LarkThreadId = { chatId }
       void this.sendCardMessage(decoded, cardJson).catch((err: unknown) => {
         this.logger?.error?.('Failed to push modal card', err)
