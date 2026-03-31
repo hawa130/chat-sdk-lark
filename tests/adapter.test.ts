@@ -1354,8 +1354,8 @@ describe('LarkAdapter', () => {
       await adapter.handleWebhook(makeRequest(makeUserEvent('ou_user1')))
       await executeFactory(mockChat)
 
-      const userSetCalls = mockChat._state.set.mock.calls.filter(([key]: [string]) =>
-        key.startsWith('lark:user:'),
+      const userSetCalls = mockChat._state.set.mock.calls.filter((call: unknown[]) =>
+        (call[0] as string).startsWith('lark:user:'),
       )
       expect(userSetCalls.length).toBeGreaterThanOrEqual(1)
       const [key, value, ttl] = userSetCalls[0]!
@@ -1407,8 +1407,8 @@ describe('LarkAdapter', () => {
       await adapter.handleWebhook(makeRequest(makeUserEvent('ou_user_bad')))
       await executeFactory(mockChat)
 
-      const userSetCalls = mockChat._state.set.mock.calls.filter(([key]: [string]) =>
-        key.startsWith('lark:user:'),
+      const userSetCalls = mockChat._state.set.mock.calls.filter((call: unknown[]) =>
+        (call[0] as string).startsWith('lark:user:'),
       )
       expect(userSetCalls.length).toBeGreaterThanOrEqual(1)
       const [key, value, ttl] = userSetCalls[0]!
@@ -1445,7 +1445,7 @@ describe('LarkAdapter', () => {
       await executeFactory(mockChat)
 
       const mentionSetCall = mockChat._state.set.mock.calls.find(
-        ([key]: [string]) => key === 'lark:user:ou_mentioned1',
+        (call: unknown[]) => call[0] === 'lark:user:ou_mentioned1',
       )
       expect(mentionSetCall).toBeDefined()
       expect(mentionSetCall![1]).toEqual({ name: 'MentionedAlice' })
