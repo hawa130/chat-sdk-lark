@@ -820,24 +820,14 @@ export class LarkAdapter implements Adapter<LarkThreadId, LarkRaw> {
     }
 
     if (response.action === 'errors') {
+      // Send errors as a reply message instead of patching the card,
+      // so the form stays intact and the user can correct their input.
       const errorText = Object.entries(response.errors)
         .map(([field, msg]) => `**${field}**: ${msg}`)
         .join('\n')
-      const errorCard: LarkCardBody = {
-        body: {
-          elements: [
-            {
-              content: `\u26a0\ufe0f **Validation errors**\n${errorText}`,
-              element_id: 'err_md',
-              tag: 'markdown',
-            },
-          ],
-        },
-        config: { update_multi: true },
-        schema: '2.0',
-      }
-      void this.api.patchCard(messageId, JSON.stringify(errorCard)).catch((err: unknown) => {
-        this.logger?.error?.('Failed to update card with errors', err)
+      const content = JSON.stringify({ text: `\u26a0\ufe0f Validation errors:\n${errorText}` })
+      void this.api.replyMessage(messageId, 'text', content).catch((err: unknown) => {
+        this.logger?.error?.('Failed to send validation errors', err)
       })
       return
     }

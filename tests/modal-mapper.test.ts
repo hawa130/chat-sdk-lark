@@ -1,6 +1,13 @@
 import { beforeEach, describe, expect, it } from 'vitest'
 import { modalMapper } from '../src/modal-mapper.ts'
-import type { LarkCardBody, LarkFormElement } from '../src/types.ts'
+import type {
+  LarkButtonElement,
+  LarkCardBody,
+  LarkFormElement,
+  LarkInputElement,
+  LarkMarkdownElement,
+  LarkSelectElement,
+} from '../src/types.ts'
 
 beforeEach(() => {
   modalMapper.resetIdCounter()
@@ -9,15 +16,39 @@ beforeEach(() => {
 const findForm = (card: LarkCardBody): LarkFormElement =>
   card.body.elements.find((el) => el.tag === 'form') as LarkFormElement
 
+const findInput = (form: LarkFormElement): LarkInputElement | undefined =>
+  form.elements.find((el): el is LarkInputElement => el.tag === 'input')
+
+const findSelect = (form: LarkFormElement): LarkSelectElement | undefined =>
+  form.elements.find((el): el is LarkSelectElement => el.tag === 'select_static')
+
+const findMarkdown = (form: LarkFormElement): LarkMarkdownElement | undefined =>
+  form.elements.find((el): el is LarkMarkdownElement => el.tag === 'markdown')
+
+/** Walk form elements (including column_set children) to find all buttons. */
+function findButtonsInForm(form: LarkFormElement): LarkButtonElement[] {
+  const buttons: LarkButtonElement[] = []
+  for (const el of form.elements) {
+    if (el.tag === 'button') {
+      buttons.push(el)
+    }
+    if (el.tag === 'column_set') {
+      for (const col of el.columns) {
+        for (const child of col.elements) {
+          if (child.tag === 'button') {
+            buttons.push(child)
+          }
+        }
+      }
+    }
+  }
+  return buttons
+}
+
 describe('modalMapper.modalToLarkCard', () => {
   it('wraps children in a form container with header', () => {
     const result = modalMapper.modalToLarkCard(
-      {
-        callbackId: 'fb',
-        children: [],
-        title: 'Feedback',
-        type: 'modal' as const,
-      },
+      { callbackId: 'fb', children: [], title: 'Feedback', type: 'modal' as const },
       'ctx_1',
     )
 
@@ -49,15 +80,14 @@ describe('modalMapper.modalToLarkCard', () => {
       'ctx',
     )
 
-    const form = findForm(result)
-    const input = form.elements.find((el) => el.tag === 'input') as Record<string, unknown>
+    const input = findInput(findForm(result))
     expect(input).toBeDefined()
-    expect(input['name']).toBe('name')
-    expect((input['label'] as { content: string }).content).toBe('Name')
-    expect((input['placeholder'] as { content: string }).content).toBe('Enter name')
-    expect(input['default_value']).toBe('Alice')
-    expect(input['max_length']).toBe(100)
-    expect(input['required']).toBe(false)
+    expect(input!.name).toBe('name')
+    expect(input!.label?.content).toBe('Name')
+    expect(input!.placeholder?.content).toBe('Enter name')
+    expect(input!.default_value).toBe('Alice')
+    expect(input!.max_length).toBe(100)
+    expect(input!.required).toBe(false)
   })
 
   it('maps multiline text_input with input_type', () => {
@@ -71,9 +101,8 @@ describe('modalMapper.modalToLarkCard', () => {
       'ctx',
     )
 
-    const form = findForm(result)
-    const input = form.elements.find((el) => el.tag === 'input') as Record<string, unknown>
-    expect(input['input_type']).toBe('multiline_text')
+    const input = findInput(findForm(result))
+    expect(input!.input_type).toBe('multiline_text')
   })
 
   it('maps select with options and initialOption', () => {
@@ -99,14 +128,13 @@ describe('modalMapper.modalToLarkCard', () => {
       'ctx',
     )
 
-    const form = findForm(result)
-    const select = form.elements.find((el) => el.tag === 'select_static') as Record<string, unknown>
-    const options = select['options'] as Array<{ text: { content: string }; value: string }>
-    expect(options).toHaveLength(2)
-    expect(options[0].text.content).toBe('Bug')
-    expect(options[0].value).toBe('bug')
-    expect(select['initial_option']).toBe('bug')
-    expect((select['placeholder'] as { content: string }).content).toBe('Pick one')
+    const select = findSelect(findForm(result))
+    expect(select).toBeDefined()
+    expect(select!.options).toHaveLength(2)
+    expect(select!.options[0].text.content).toBe('Bug')
+    expect(select!.options[0].value).toBe('bug')
+    expect(select!.initial_option).toBe('bug')
+    expect(select!.placeholder?.content).toBe('Pick one')
   })
 
   it('maps radio_select as select_static fallback', () => {
@@ -130,11 +158,9 @@ describe('modalMapper.modalToLarkCard', () => {
       'ctx',
     )
 
-    const form = findForm(result)
-    const select = form.elements.find((el) => el.tag === 'select_static') as Record<string, unknown>
+    const select = findSelect(findForm(result))
     expect(select).toBeDefined()
-    const options = select['options'] as unknown[]
-    expect(options).toHaveLength(2)
+    expect(select!.options).toHaveLength(2)
   })
 
   it('maps text child as markdown', () => {
@@ -148,9 +174,8 @@ describe('modalMapper.modalToLarkCard', () => {
       'ctx',
     )
 
-    const form = findForm(result)
-    const md = form.elements.find((el) => el.tag === 'markdown') as Record<string, unknown>
-    expect(md['content']).toBe('Please fill out the form.')
+    const md = findMarkdown(findForm(result))
+    expect(md?.content).toBe('Please fill out the form.')
   })
 
   it('maps fields child as key-value column_set pairs', () => {
@@ -190,18 +215,19 @@ describe('modalMapper.modalToLarkCard', () => {
       'ctx_456',
     )
 
-    const form = findForm(result)
-    const allBtns = findButtonsInForm(form)
-    const submitBtn = allBtns.find((b) => b['form_action_type'] === 'submit')
+    const buttons = findButtonsInForm(findForm(result))
+    const submitBtn = buttons.find((b) => b.form_action_type === 'submit')
     expect(submitBtn).toBeDefined()
-    expect((submitBtn!['text'] as { content: string }).content).toBe('Go')
+    expect(submitBtn!.text.content).toBe('Go')
 
-    const behaviors = submitBtn!['behaviors'] as Array<{ value: Record<string, string> }>
-    const cbValue = behaviors[0].value
-    expect(cbValue['__modal']).toBe('1')
-    expect(cbValue['__callbackId']).toBe('my_form')
-    expect(cbValue['__privateMetadata']).toBe('{"foo":"bar"}')
-    expect(cbValue['__contextId']).toBe('ctx_456')
+    const cbValue = submitBtn!.behaviors[0]
+    expect(cbValue.type).toBe('callback')
+    if (cbValue.type === 'callback') {
+      expect(cbValue.value['__modal']).toBe('1')
+      expect(cbValue.value['__callbackId']).toBe('my_form')
+      expect(cbValue.value['__privateMetadata']).toBe('{"foo":"bar"}')
+      expect(cbValue.value['__contextId']).toBe('ctx_456')
+    }
   })
 
   it('includes cancel button with notifyOnClose metadata', () => {
@@ -217,13 +243,15 @@ describe('modalMapper.modalToLarkCard', () => {
       'ctx_456',
     )
 
-    const form = findForm(result)
-    const allBtns = findButtonsInForm(form)
-    const resetBtn = allBtns.find((b) => b['form_action_type'] === 'reset')
+    const buttons = findButtonsInForm(findForm(result))
+    const resetBtn = buttons.find((b) => b.form_action_type === 'reset')
     expect(resetBtn).toBeDefined()
-    expect((resetBtn!['text'] as { content: string }).content).toBe('Nah')
-    const behaviors = resetBtn!['behaviors'] as Array<{ value: Record<string, string> }>
-    expect(behaviors[0].value['__notifyOnClose']).toBe('1')
+    expect(resetBtn!.text.content).toBe('Nah')
+
+    const cbValue = resetBtn!.behaviors[0]
+    if (cbValue.type === 'callback') {
+      expect(cbValue.value['__notifyOnClose']).toBe('1')
+    }
   })
 
   it('always includes cancel button with default label', () => {
@@ -232,11 +260,10 @@ describe('modalMapper.modalToLarkCard', () => {
       'ctx',
     )
 
-    const form = findForm(result)
-    const allBtns = findButtonsInForm(form)
-    const resetBtn = allBtns.find((b) => b['form_action_type'] === 'reset')
+    const buttons = findButtonsInForm(findForm(result))
+    const resetBtn = buttons.find((b) => b.form_action_type === 'reset')
     expect(resetBtn).toBeDefined()
-    expect((resetBtn!['text'] as { content: string }).content).toBe('Cancel')
+    expect(resetBtn!.text.content).toBe('Cancel')
   })
 
   it('uses default submit label when not specified', () => {
@@ -245,10 +272,9 @@ describe('modalMapper.modalToLarkCard', () => {
       'ctx',
     )
 
-    const form = findForm(result)
-    const allBtns = findButtonsInForm(form)
-    const submitBtn = allBtns.find((b) => b['form_action_type'] === 'submit')
-    expect((submitBtn!['text'] as { content: string }).content).toBe('Submit')
+    const buttons = findButtonsInForm(findForm(result))
+    const submitBtn = buttons.find((b) => b.form_action_type === 'submit')
+    expect(submitBtn!.text.content).toBe('Submit')
   })
 })
 
@@ -270,30 +296,9 @@ describe('modalMapper.modalToLarkCard with errors', () => {
 
     const form = findForm(result)
     const errorEl = form.elements.find(
-      (el) =>
-        el.tag === 'markdown' &&
-        (el as Record<string, unknown>)['content']?.toString().includes('Name is required'),
+      (el): el is LarkMarkdownElement =>
+        el.tag === 'markdown' && (el.content?.includes('Name is required') ?? false),
     )
     expect(errorEl).toBeDefined()
   })
 })
-
-/** Walk form elements (including column_set children) to find all buttons. */
-function findButtonsInForm(form: LarkFormElement): Array<Record<string, unknown>> {
-  const buttons: Array<Record<string, unknown>> = []
-  for (const el of form.elements) {
-    if (el.tag === 'button') {
-      buttons.push(el as unknown as Record<string, unknown>)
-    }
-    if (el.tag === 'column_set') {
-      for (const col of el.columns) {
-        for (const child of col.elements) {
-          if (child.tag === 'button') {
-            buttons.push(child as unknown as Record<string, unknown>)
-          }
-        }
-      }
-    }
-  }
-  return buttons
-}

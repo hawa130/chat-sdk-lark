@@ -12,6 +12,7 @@ import type {
   LarkSelectElement,
   LarkTableElement,
 } from './types.ts'
+import { mapFieldsToColumns } from './card-shared.ts'
 
 const ID_SIZE = 12
 const MIN_PAGE_SIZE = 1
@@ -129,40 +130,7 @@ const mapActionChild = (child: CardChild): LarkCardElement | null => {
 }
 
 const mapFields = (child: CardChild): LarkColumnSetElement[] =>
-  (child.children ?? []).map((field) => ({
-    background_style: 'default',
-    columns: [
-      {
-        elements: [
-          {
-            content: `**${field.label ?? ''}**`,
-            element_id: nextElementId(),
-            tag: 'markdown' as const,
-          },
-        ],
-        tag: 'column' as const,
-        vertical_align: 'top',
-        weight: 1,
-        width: 'weighted',
-      },
-      {
-        elements: [
-          {
-            content: String(field.value ?? ''),
-            element_id: nextElementId(),
-            tag: 'markdown' as const,
-            text_align: 'right' as const,
-          },
-        ],
-        tag: 'column' as const,
-        vertical_align: 'top',
-        weight: 1,
-        width: 'weighted',
-      },
-    ],
-    flex_mode: 'none',
-    tag: 'column_set' as const,
-  }))
+  mapFieldsToColumns(child.children ?? [], nextElementId)
 
 const mapTable = (child: CardChild): LarkTableElement | null => {
   if (!child.headers?.length) {

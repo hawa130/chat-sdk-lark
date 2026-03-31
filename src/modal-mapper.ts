@@ -3,11 +3,11 @@ import type {
   LarkCardBody,
   LarkCardElement,
   LarkCardHeader,
-  LarkColumnSetElement,
   LarkInputElement,
   LarkMarkdownElement,
   LarkSelectElement,
 } from './types.ts'
+import { mapFieldsToColumns } from './card-shared.ts'
 
 /**
  * Structural type for Chat SDK ModalElement children.
@@ -99,40 +99,7 @@ const mapSelect = (child: ModalChild): LarkSelectElement => {
 }
 
 const mapFields = (child: ModalChild): LarkColumnSetElement[] =>
-  (child.children ?? []).map((field) => ({
-    background_style: 'default',
-    columns: [
-      {
-        elements: [
-          {
-            content: `**${field.label ?? ''}**`,
-            element_id: nextId(),
-            tag: 'markdown' as const,
-          } satisfies LarkMarkdownElement,
-        ],
-        tag: 'column' as const,
-        vertical_align: 'top',
-        weight: 1,
-        width: 'weighted',
-      },
-      {
-        elements: [
-          {
-            content: String(field.value ?? ''),
-            element_id: nextId(),
-            tag: 'markdown' as const,
-            text_align: 'right' as const,
-          } satisfies LarkMarkdownElement,
-        ],
-        tag: 'column' as const,
-        vertical_align: 'top',
-        weight: 1,
-        width: 'weighted',
-      },
-    ],
-    flex_mode: 'none',
-    tag: 'column_set' as const,
-  }))
+  mapFieldsToColumns(child.children ?? [], nextId)
 
 const mapModalChild = (child: ModalChild): LarkCardElement | LarkCardElement[] | null => {
   switch (child.type) {
