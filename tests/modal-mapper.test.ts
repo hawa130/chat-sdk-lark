@@ -131,8 +131,8 @@ describe('modalMapper.modalToLarkCard', () => {
     const select = findSelect(findForm(result))
     expect(select).toBeDefined()
     expect(select!.options).toHaveLength(2)
-    expect(select!.options[0].text.content).toBe('Bug')
-    expect(select!.options[0].value).toBe('bug')
+    expect(select!.options[0]!.text.content).toBe('Bug')
+    expect(select!.options[0]!.value).toBe('bug')
     expect(select!.initial_option).toBe('bug')
     expect(select!.placeholder?.content).toBe('Pick one')
   })
@@ -220,7 +220,7 @@ describe('modalMapper.modalToLarkCard', () => {
     expect(submitBtn).toBeDefined()
     expect(submitBtn!.text.content).toBe('Go')
 
-    const cbValue = submitBtn!.behaviors[0]
+    const cbValue = submitBtn!.behaviors[0]!
     expect(cbValue.type).toBe('callback')
     if (cbValue.type === 'callback') {
       expect(cbValue.value['__modal']).toBe('1')
@@ -248,7 +248,7 @@ describe('modalMapper.modalToLarkCard', () => {
     expect(resetBtn).toBeDefined()
     expect(resetBtn!.text.content).toBe('Nah')
 
-    const cbValue = resetBtn!.behaviors[0]
+    const cbValue = resetBtn!.behaviors[0]!
     if (cbValue.type === 'callback') {
       expect(cbValue.value['__notifyOnClose']).toBe('1')
     }

@@ -3,6 +3,7 @@ import type {
   LarkCardBody,
   LarkCardElement,
   LarkCardHeader,
+  LarkColumnSetElement,
   LarkInputElement,
   LarkMarkdownElement,
   LarkSelectElement,

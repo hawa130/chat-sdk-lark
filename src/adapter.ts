@@ -910,10 +910,7 @@ export class LarkAdapter implements Adapter<LarkThreadId, LarkRaw> {
     return this.extractImageKey(uploadRes) || null
   }
 
-  private async uploadUrlToImageKey<TNode extends Record<string, string | undefined>>(
-    node: TNode,
-    field: string & keyof TNode,
-  ): Promise<void> {
+  private async uploadUrlToImageKey(node: CardImageNode, field: 'imageUrl' | 'url'): Promise<void> {
     const url = node[field]
     if (typeof url !== 'string' || !isHttpUrl(url)) {
       return
@@ -921,17 +918,14 @@ export class LarkAdapter implements Adapter<LarkThreadId, LarkRaw> {
     try {
       const key = await this.fetchAndUploadImage(url)
       if (key) {
-        node[field] = key as TNode[typeof field]
+        node[field] = key
       }
     } catch {
       this.logger?.warn?.('Failed to upload card image', { field, url })
     }
   }
 
-  private async uploadCardImages(
-    node: { children?: CardImageNode[]; imageUrl?: string; type?: string; url?: string },
-    isRoot = true,
-  ): Promise<void> {
+  private async uploadCardImages(node: CardImageNode, isRoot = true): Promise<void> {
     if (node.type === 'image') {
       await this.uploadUrlToImageKey(node, 'url')
     }
