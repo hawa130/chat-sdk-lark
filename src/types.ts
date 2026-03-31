@@ -258,6 +258,26 @@ interface LarkWebhookBody {
   type?: string
 }
 
+/** card.action.trigger callback (v2 schema). */
+interface LarkCardActionBody extends LarkWebhookBody {
+  event?: {
+    operator?: { open_id?: string; union_id?: string; user_id?: string }
+    token?: string
+    action?: {
+      tag?: string
+      value?: Record<string, unknown>
+      option?: string
+      input_value?: string
+      form_value?: Record<string, unknown>
+      name?: string
+    }
+  }
+  context?: {
+    open_message_id?: string
+    open_chat_id?: string
+  }
+}
+
 // ---------------------------------------------------------------------------
 // SDK error shape (Axios-based)
 // ---------------------------------------------------------------------------
@@ -281,6 +301,7 @@ export type {
   CardChild,
   CardKitCard,
   LarkAdapterConfig,
+  LarkCardActionBody,
   LarkBehavior,
   LarkButtonElement,
   LarkCardBody,

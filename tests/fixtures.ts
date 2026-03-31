@@ -90,12 +90,65 @@ const makeRequest = (body: unknown): Request =>
     method: 'POST',
   })
 
+/** Card action callback (card.action.trigger). */
+const makeCardActionEvent = (actionId = 'approve', value = 'order_123') => ({
+  context: {
+    open_chat_id: 'oc_chat001',
+    open_message_id: 'om_card_msg001',
+  },
+  event: {
+    action: {
+      tag: 'button',
+      value: { action: value, id: actionId },
+    },
+    operator: { open_id: 'ou_user1', union_id: 'un1' },
+    token: 'c-card-token-001',
+  },
+  header: {
+    app_id: 'test-app-id',
+    create_time: '1700000000000',
+    event_id: 'ev-card-action-001',
+    event_type: 'card.action.trigger',
+    tenant_key: 'test-tenant',
+    token: 'test-verification-token',
+  },
+  schema: '2.0',
+})
+
+/** Card select action callback. */
+const makeSelectActionEvent = (actionId = 'priority', option = 'high') => ({
+  context: {
+    open_chat_id: 'oc_chat001',
+    open_message_id: 'om_card_msg002',
+  },
+  event: {
+    action: {
+      option,
+      tag: 'select_static',
+      value: { id: actionId },
+    },
+    operator: { open_id: 'ou_user1' },
+    token: 'c-card-token-002',
+  },
+  header: {
+    app_id: 'test-app-id',
+    create_time: '1700000000000',
+    event_id: 'ev-card-select-001',
+    event_type: 'card.action.trigger',
+    tenant_key: 'test-tenant',
+    token: 'test-verification-token',
+  },
+  schema: '2.0',
+})
+
 const fixtures = {
+  makeCardActionEvent,
   makeChallengeEvent,
   makeDMEvent,
   makeMessageEvent,
   makeReactionEvent,
   makeRequest,
+  makeSelectActionEvent,
 }
 
 export { fixtures }

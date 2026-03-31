@@ -5,7 +5,14 @@ import type { LarkRawMessage } from '../src/types.ts'
 import { fixtures } from './fixtures.ts'
 import { server } from './setup.ts'
 
-const { makeChallengeEvent, makeMessageEvent, makeReactionEvent, makeRequest } = fixtures
+const {
+  makeCardActionEvent,
+  makeChallengeEvent,
+  makeMessageEvent,
+  makeReactionEvent,
+  makeRequest,
+  makeSelectActionEvent,
+} = fixtures
 
 const BASE = 'https://open.feishu.cn'
 const TOKEN_URL = `${BASE}/open-apis/auth/v3/tenant_access_token/internal`
@@ -247,6 +254,56 @@ describe('LarkAdapter', () => {
       expect(reactionEvent.rawEmoji).toBe('THUMBSUP')
       // Verify threadId decodes back to the chat from getMessage
       expect(adapter.channelIdFromThreadId(reactionEvent.threadId)).toBe('oc_chat001')
+    })
+
+    it('routes card.action.trigger to processAction', async () => {
+      const adapter = makeAdapter()
+      const mockChat = await initAdapter(adapter)
+
+      const event = makeCardActionEvent('approve', 'order_123')
+      const res = await adapter.handleWebhook(makeRequest(event))
+      expect(res.status).toBe(HTTP_OK)
+      expect(mockChat.processAction).toHaveBeenCalledTimes(ONCE)
+
+      const call = mockChat.processAction.mock.calls[FIRST_MESSAGE]!
+      const actionEvent = call[0] as {
+        actionId: string
+        messageId: string
+        threadId: string
+        triggerId: string
+        user: { userId: string }
+        value: string
+      }
+      expect(actionEvent.actionId).toBe('approve')
+      expect(actionEvent.value).toBe('order_123')
+      expect(actionEvent.messageId).toBe('om_card_msg001')
+      expect(adapter.channelIdFromThreadId(actionEvent.threadId)).toBe('oc_chat001')
+      expect(actionEvent.triggerId).toBe('c-card-token-001')
+      expect(actionEvent.user.userId).toBe('ou_user1')
+    })
+
+    it('routes select action with option as value', async () => {
+      const adapter = makeAdapter()
+      const mockChat = await initAdapter(adapter)
+
+      const event = makeSelectActionEvent('priority', 'high')
+      await adapter.handleWebhook(makeRequest(event))
+      expect(mockChat.processAction).toHaveBeenCalledTimes(ONCE)
+
+      const call = mockChat.processAction.mock.calls[FIRST_MESSAGE]!
+      const actionEvent = call[0] as { actionId: string; value: string }
+      expect(actionEvent.actionId).toBe('priority')
+      expect(actionEvent.value).toBe('high')
+    })
+
+    it('deduplicates card action events', async () => {
+      const adapter = makeAdapter()
+      const mockChat = await initAdapter(adapter)
+
+      const event = makeCardActionEvent()
+      await adapter.handleWebhook(makeRequest(event))
+      await adapter.handleWebhook(makeRequest(event))
+      expect(mockChat.processAction).toHaveBeenCalledTimes(ONCE)
     })
   })
 

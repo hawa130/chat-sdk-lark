@@ -10,7 +10,7 @@ import { fixtures } from './fixtures.ts'
 import { server } from './setup.ts'
 import { createLarkTestContext } from './test-utils.ts'
 
-const { makeDMEvent, makeMessageEvent, makeReactionEvent } = fixtures
+const { makeCardActionEvent, makeDMEvent, makeMessageEvent, makeReactionEvent } = fixtures
 
 const BASE = 'https://open.feishu.cn'
 const TOKEN_URL = `${BASE}/open-apis/auth/v3/tenant_access_token/internal`
@@ -202,5 +202,23 @@ describe('integration: Chat → Lark adapter pipeline', () => {
 
     const ONCE = 1
     expect(mentionCount).toBe(ONCE)
+  })
+
+  it('action: button click fires onAction with correct actionId and value', async () => {
+    let capturedActionId = ''
+    let capturedValue: string | undefined
+
+    const ctx = createLarkTestContext({
+      onAction: async (event) => {
+        capturedActionId = event.actionId
+        capturedValue = event.value
+      },
+    })
+
+    await ctx.chat.initialize()
+    await ctx.sendWebhook(makeCardActionEvent('approve', 'order_456'))
+
+    expect(capturedActionId).toBe('approve')
+    expect(capturedValue).toBe('order_456')
   })
 })

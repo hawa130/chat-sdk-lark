@@ -19,6 +19,7 @@ import type {
 } from 'chat'
 import type {
   LarkAdapterConfig,
+  LarkCardActionBody,
   LarkCardBody,
   LarkFileType,
   LarkMessageItem,
@@ -46,6 +47,7 @@ type EventData<TKey extends keyof EventHandles> =
     : never
 
 const ADAPTER_NAME = 'lark'
+const CARD_ACTION_EVENT_TYPE = 'card.action.trigger'
 const DEDUP_CAPACITY = 500
 const STREAM_ELEMENT_ID = 'stream_md'
 const INITIAL_SEQUENCE = 1
@@ -660,8 +662,43 @@ export class LarkAdapter implements Adapter<LarkThreadId, LarkRaw> {
     if (eventId) {
       this.dedup.add(eventId)
     }
-    this.dispatchEvent(body, options)
+    if (body.header?.event_type === CARD_ACTION_EVENT_TYPE) {
+      this.handleCardAction(body as LarkCardActionBody, options)
+    } else {
+      this.dispatchEvent(body, options)
+    }
     return new Response('ok', { status: HTTP_OK })
+  }
+
+  private handleCardAction(body: LarkCardActionBody, options?: WebhookOptions): void {
+    const event = body.event
+    const context = body.context
+    if (!event?.action || !context?.open_chat_id) {
+      return
+    }
+    const actionValue = event.action.value ?? {}
+    const actionId = String(actionValue['id'] ?? '')
+    const value = event.action.option ?? String(actionValue['action'] ?? '')
+    const threadId = this.encodeThreadId({ chatId: context.open_chat_id })
+    this.chat.processAction(
+      {
+        actionId,
+        adapter: this,
+        messageId: context.open_message_id ?? '',
+        raw: body,
+        threadId,
+        triggerId: event.token,
+        user: {
+          fullName: '',
+          isBot: false,
+          isMe: false,
+          userId: event.operator?.open_id ?? '',
+          userName: '',
+        },
+        value: value || undefined,
+      },
+      options,
+    )
   }
 
   private dispatchEvent(body: LarkWebhookBody, options?: WebhookOptions): void {
