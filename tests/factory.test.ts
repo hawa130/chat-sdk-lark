@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 
 describe('createLarkAdapter', () => {
   const originalEnv = { ...process.env }
@@ -49,5 +49,43 @@ describe('createLarkAdapter', () => {
     process.env.LARK_DOMAIN = 'lark'
     const { createLarkAdapter } = await import('../src/factory.ts')
     expect(() => createLarkAdapter()).not.toThrow()
+  })
+
+  it('reads LARK_ENCRYPT_KEY from env', async () => {
+    process.env.LARK_APP_ID = 'id'
+    process.env.LARK_APP_SECRET = 'secret'
+    process.env.LARK_ENCRYPT_KEY = 'my-encrypt-key'
+    const { createLarkAdapter } = await import('../src/factory.ts')
+    expect(() => createLarkAdapter()).not.toThrow()
+  })
+
+  it('reads LARK_VERIFICATION_TOKEN from env', async () => {
+    process.env.LARK_APP_ID = 'id'
+    process.env.LARK_APP_SECRET = 'secret'
+    process.env.LARK_VERIFICATION_TOKEN = 'my-verify-token'
+    const { createLarkAdapter } = await import('../src/factory.ts')
+    expect(() => createLarkAdapter()).not.toThrow()
+  })
+
+  it('LARK_DOMAIN=feishu uses default domain', async () => {
+    process.env.LARK_APP_ID = 'id'
+    process.env.LARK_APP_SECRET = 'secret'
+    process.env.LARK_DOMAIN = 'feishu'
+    const { createLarkAdapter } = await import('../src/factory.ts')
+    expect(() => createLarkAdapter()).not.toThrow()
+  })
+
+  it('passes logger through to adapter', async () => {
+    process.env.LARK_APP_ID = 'id'
+    process.env.LARK_APP_SECRET = 'secret'
+    const mockLogger = {
+      child: () => mockLogger,
+      debug: vi.fn(),
+      error: vi.fn(),
+      info: vi.fn(),
+      warn: vi.fn(),
+    }
+    const { createLarkAdapter } = await import('../src/factory.ts')
+    expect(() => createLarkAdapter({ logger: mockLogger })).not.toThrow()
   })
 })
