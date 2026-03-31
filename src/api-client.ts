@@ -1,56 +1,105 @@
-import { AppType, Client, Domain } from '@larksuiteoapi/node-sdk'
+import { AppType, Client, Domain, LoggerLevel } from '@larksuiteoapi/node-sdk'
+import {
+  AdapterRateLimitError,
+  AuthenticationError,
+  PermissionError,
+  ResourceNotFoundError,
+} from '@chat-adapter/shared'
 import type { LarkAdapterConfig, LarkFileType, LarkSdkError } from './types.ts'
 
+type ApiLogger = {
+  debug(...args: unknown[]): void
+  error(...args: unknown[]): void
+  info(...args: unknown[]): void
+  warn(...args: unknown[]): void
+}
+
+const ADAPTER_NAME = 'lark'
 const HTTP_RATE_LIMIT = 429
 const HTTP_UNAUTHORIZED = 401
 const HTTP_FORBIDDEN = 403
 const HTTP_NOT_FOUND = 404
-const LARK_AUTH_CODE_A = 99991671
-const LARK_AUTH_CODE_B = 99991663
-const LARK_NETWORK_CODE = 99991
+const LARK_RATE_LIMIT_CODE = 99991400
+const LARK_INVALID_ACCESS_TOKEN = 99991663
+const LARK_INVALID_TOKEN_FORMAT = 99991671
 const DEFAULT_PAGE_SIZE = 20
-
-const makeError = (message: string, name: string): Error =>
-  Object.assign(new Error(message), { name })
 
 const extractStatus = (err: LarkSdkError): number | undefined =>
   err.response?.status ?? err.httpCode ?? err.status
 
 const extractCode = (err: LarkSdkError): number | undefined => err.code ?? err.response?.data?.code
 
+const isRateLimit = (status: number | undefined, code: number | undefined): boolean =>
+  status === HTTP_RATE_LIMIT || code === LARK_RATE_LIMIT_CODE
+
 const isAuthError = (status: number | undefined, code: number | undefined): boolean =>
   status === HTTP_UNAUTHORIZED ||
-  status === HTTP_FORBIDDEN ||
-  code === LARK_AUTH_CODE_A ||
-  code === LARK_AUTH_CODE_B
+  code === LARK_INVALID_ACCESS_TOKEN ||
+  code === LARK_INVALID_TOKEN_FORMAT
+
+const matchLarkError = (
+  status: number | undefined,
+  code: number | undefined,
+): Error | undefined => {
+  if (isRateLimit(status, code)) {
+    return new AdapterRateLimitError(ADAPTER_NAME)
+  }
+  if (isAuthError(status, code)) {
+    return new AuthenticationError(ADAPTER_NAME)
+  }
+  if (status === HTTP_FORBIDDEN) {
+    return new PermissionError(ADAPTER_NAME, 'access resource')
+  }
+  if (status === HTTP_NOT_FOUND) {
+    return new ResourceNotFoundError(ADAPTER_NAME, 'resource')
+  }
+  return undefined
+}
 
 const mapError = (error: unknown): Error => {
   const err = error as LarkSdkError
-  const status = extractStatus(err)
-  const code = extractCode(err)
-  const mapped =
-    (status === HTTP_RATE_LIMIT && makeError('Rate limit exceeded', 'AdapterRateLimitError')) ||
-    (isAuthError(status, code) && makeError('Authentication failed', 'AuthenticationError')) ||
-    (status === HTTP_NOT_FOUND && makeError('Resource not found', 'ResourceNotFoundError')) ||
-    (code === LARK_NETWORK_CODE && makeError('Network error', 'NetworkError')) ||
-    (error instanceof Error && error) ||
-    new Error(String(error))
-  return mapped
+  const matched = matchLarkError(extractStatus(err), extractCode(err))
+  if (matched) {
+    return matched
+  }
+  if (error instanceof Error) {
+    return error
+  }
+  return new Error(String(error))
 }
+
+const bridgeLogger = (logger: ApiLogger) => ({
+  debug: logger.debug.bind(logger),
+  error: logger.error.bind(logger),
+  info: logger.info.bind(logger),
+  trace: logger.debug.bind(logger),
+  warn: logger.warn.bind(logger),
+})
 
 class LarkApiClient {
   readonly client: Client
 
   constructor(
     config: Pick<LarkAdapterConfig, 'appId' | 'appSecret' | 'domain' | 'disableTokenCache'>,
+    logger?: ApiLogger,
   ) {
-    this.client = new Client({
+    const base = {
       appId: config.appId,
       appSecret: config.appSecret,
-      appType: AppType.SelfBuild,
+      appType: AppType.SelfBuild as const,
       disableTokenCache: config.disableTokenCache,
       domain: config.domain ?? Domain.Feishu,
-    })
+    }
+
+    if (logger) {
+      this.client = new Client({
+        ...base,
+        logger: bridgeLogger(logger),
+        loggerLevel: LoggerLevel.debug,
+      })
+    } else {
+      this.client = new Client({ ...base, loggerLevel: LoggerLevel.error })
+    }
   }
 
   async sendMessage(chatId: string, msgType: string, content: string) {

@@ -183,7 +183,7 @@ export default class LarkAdapter implements Adapter<LarkThreadId, LarkRaw> {
   private botOpenId = ''
   private resolvedUserName: string
   private readonly config: LarkAdapterConfig
-  private readonly api: LarkApiClient
+  private api!: LarkApiClient
   private readonly converter = new LarkFormatConverter()
   private readonly dedup = new DedupCache(DEDUP_CAPACITY)
   private readonly dispatcher: EventDispatcher
@@ -196,12 +196,6 @@ export default class LarkAdapter implements Adapter<LarkThreadId, LarkRaw> {
   constructor(config: LarkAdapterConfig) {
     this.config = config
     this.resolvedUserName = config.userName ?? 'LarkBot'
-    this.api = new LarkApiClient({
-      appId: config.appId,
-      appSecret: config.appSecret,
-      disableTokenCache: config.disableTokenCache,
-      domain: config.domain,
-    })
     this.dispatcher = new EventDispatcher({
       encryptKey: config.encryptKey,
       verificationToken: config.verificationToken,
@@ -212,6 +206,15 @@ export default class LarkAdapter implements Adapter<LarkThreadId, LarkRaw> {
   async initialize(chat: ChatInstance): Promise<void> {
     this.chat = chat
     this.logger = chat.getLogger(ADAPTER_NAME)
+    this.api = new LarkApiClient(
+      {
+        appId: this.config.appId,
+        appSecret: this.config.appSecret,
+        disableTokenCache: this.config.disableTokenCache,
+        domain: this.config.domain,
+      },
+      this.logger,
+    )
     const info = await this.api.getBotInfo()
     this.botOpenId = info.bot?.open_id ?? ''
     if (info.bot?.app_name && !this.config.userName) {
