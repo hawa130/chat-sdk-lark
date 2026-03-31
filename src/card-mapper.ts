@@ -28,7 +28,7 @@ const STEP = Math.ceil((1.6 * MASK * ID_SIZE) / ALPHABET.length)
 /* eslint-disable no-magic-numbers -- nanoid-style random byte pool implementation */
 
 // Pre-allocated random byte pool to amortize crypto.getRandomValues calls
-let pool: Uint8Array | undefined = undefined
+let pool: Uint8Array<ArrayBuffer> | undefined = undefined
 let poolOffset = 0
 
 const fillPool = (bytes: number): void => {

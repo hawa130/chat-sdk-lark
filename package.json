@@ -1,6 +1,6 @@
 {
   "name": "chat-adapter-lark",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Lark (飞书) adapter for Chat SDK",
   "keywords": [
     "chat-adapter",
