@@ -8,7 +8,7 @@ Lark (飞书) adapter for [Chat SDK](https://chat-sdk.dev/docs). Supports both F
 ## Installation
 
 ```bash
-pnpm add chat chat-adapter-lark
+npm install chat chat-adapter-lark @chat-adapter/state-memory
 ```
 
 ## Usage
@@ -18,11 +18,14 @@ The adapter auto-detects `LARK_APP_ID` and `LARK_APP_SECRET` from environment va
 ```typescript
 import { Chat } from 'chat'
 import { createLarkAdapter } from 'chat-adapter-lark'
+import { createMemoryState } from '@chat-adapter/state-memory'
 
 const bot = new Chat({
+  userName: 'my-bot',
   adapters: {
     lark: createLarkAdapter(),
   },
+  state: createMemoryState(),
 })
 
 bot.onNewMention(async (thread, message) => {
@@ -49,14 +52,7 @@ export async function POST(request: Request) {
 app.post('/webhook/lark', (c) => bot.webhooks.lark(c.req.raw))
 ```
 
-**Express:**
-
-```typescript
-app.post('/webhook/lark', async (req, res) => {
-  const response = await bot.webhooks.lark(req)
-  res.status(response.status).send(await response.text())
-})
-```
+Webhook handlers use the standard [Fetch API](https://developer.mozilla.org/en-US/docs/Web/API/Request) `Request`/`Response` types. Frameworks that don't natively provide a Fetch `Request` (e.g. Express) need a conversion step — see your framework's docs for how to adapt incoming requests.
 
 ## Lark app setup
 
@@ -66,32 +62,42 @@ app.post('/webhook/lark', async (req, res) => {
 2. Create a **Custom App**
 3. Add the **Bot** capability under Features
 
-### 2. Configure events
+### 2. Configure events and callbacks
 
 1. Set the event subscription URL to your webhook endpoint
 2. URL verification is handled automatically — no extra setup needed
-3. Subscribe to the following events:
-   - `im.message.receive_v1` — Receive messages
-   - `im.message.reaction.created_v1` — Reaction added
-   - `im.message.reaction.deleted_v1` — Reaction removed
-   - `card.action.trigger` — Card button/form interactions
+3. Under **Event configuration**, subscribe to the following events:
+   - `im.message.receive_v1` — Receive messages (required)
+   - `im.message.reaction.created_v1` — Reaction added (if using reactions)
+   - `im.message.reaction.deleted_v1` — Reaction removed (if using reactions)
+4. Under **Callback configuration**, add the following callback:
+   - `card.action.trigger` — Card button/form interactions (if using interactive cards)
 
 ### 3. Add permissions
 
-Add the following scopes to your app:
+Add the following scopes to your app. The table maps each permission to the adapter functionality that requires it.
 
-| Permission                         | Description                                      |
-| ---------------------------------- | ------------------------------------------------ |
-| `im:message`                       | Read, send, edit, and delete messages            |
-| `im:message.group_at_msg:readonly` | Receive @bot messages in group chats             |
-| `im:message.p2p_msg:readonly`      | Receive direct messages                          |
-| `im:message.reactions:read`        | Receive reaction events                          |
-| `im:chat:readonly`                 | Read chat info                                   |
-| `im:chat:create`                   | Create DM conversations (for `openDM`)           |
-| `im:resource`                      | Upload and download images and files             |
-| `contact:contact.base:readonly`    | Call the contacts API (for user name resolution) |
-| `contact:user.base:readonly`       | Access user display names                        |
-| `contact:user.id:readonly`         | Read user IDs                                    |
+**Core — required for basic messaging:**
+
+| Permission                         | Lark API                                      | Adapter feature                      |
+| ---------------------------------- | --------------------------------------------- | ------------------------------------ |
+| `im:message:send_as_bot`           | Send, reply, edit, delete messages            | Post, edit, delete messages          |
+| `im:message:readonly`              | Get, list messages; get message resources     | Fetch messages and message history   |
+| `im:message.group_at_msg:readonly` | `im.message.receive_v1` event (group @bot)    | Receive @bot messages in group chats |
+| `im:message.p2p_msg:readonly`      | `im.message.receive_v1` event (DM)            | Receive direct messages              |
+| `im:chat:readonly`                 | `GET /im/v1/chats/:chat_id`                   | `fetchChannelInfo`                   |
+| `contact:user.base:readonly`       | `GET /contact/v3/users/:user_id` (name field) | Resolve user display names           |
+
+**Feature-specific — add based on the features you use:**
+
+| Permission                        | Lark API                                           | Adapter feature                    |
+| --------------------------------- | -------------------------------------------------- | ---------------------------------- |
+| `im:message.reactions:write_only` | Add/remove reactions                               | `addReaction`, `removeReaction`    |
+| `im:resource`                     | `POST /im/v1/images`, `POST /im/v1/files`          | File and image uploads             |
+| `cardkit:card:write`              | `POST /cardkit/v1/cards`, element/settings updates | Card streaming                     |
+| `im:chat:create`                  | `POST /im/v1/chats`                                | Create DM conversations (`openDM`) |
+
+> **Note:** `im:message:readonly` also covers reaction events (`im.message.reaction.created/deleted_v1`) and listing reactions, so no additional permission is needed for receiving reaction events.
 
 ### 4. Publish
 
@@ -102,7 +108,7 @@ Publish the app to make it available in your workspace.
 The `domain` option controls which API endpoint is used. Use `"feishu"` for mainland China and `"lark"` for international:
 
 ```typescript
-import { Domain } from '@larksuiteoapi/node-sdk'
+import { createLarkAdapter, Domain } from 'chat-adapter-lark'
 
 // China (Feishu, default)
 createLarkAdapter({ domain: Domain.Feishu })
