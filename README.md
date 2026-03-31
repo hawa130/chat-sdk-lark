@@ -170,14 +170,14 @@ LARK_DOMAIN=feishu               # Optional, "feishu" (default) or "lark"
 
 ### Conversations
 
-| Feature            | Supported              |
-| ------------------ | ---------------------- |
-| Mentions           | Yes                    |
-| Add reactions      | Yes                    |
-| Remove reactions   | Yes                    |
-| Typing indicator   | No                     |
-| DMs                | Yes                    |
-| Ephemeral messages | Interactive cards only |
+| Feature            | Supported                                 |
+| ------------------ | ----------------------------------------- |
+| Mentions           | Yes                                       |
+| Add reactions      | Yes                                       |
+| Remove reactions   | Yes                                       |
+| Typing indicator   | No                                        |
+| DMs                | Yes                                       |
+| Ephemeral messages | Yes (fire-and-forget, cannot edit/delete) |
 
 ### Message history
 

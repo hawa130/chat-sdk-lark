@@ -581,6 +581,7 @@ export class LarkAdapter implements Adapter<LarkThreadId, LarkRaw> {
     userId: string,
     message: AdapterPostableMessage,
   ): Promise<EphemeralMessage<LarkRaw>> {
+    // Lark ephemeral API does not return a message ID — messages cannot be edited or deleted
     const { chatId } = this.decodeThreadId(threadId)
     const card = extractCard(message)
     let cardObj: LarkCardBody
