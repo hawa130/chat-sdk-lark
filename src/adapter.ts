@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from 'node:async_hooks'
 import type {
   Adapter,
   AdapterPostableMessage,
@@ -230,7 +231,7 @@ export class LarkAdapter implements Adapter<LarkThreadId, LarkRaw> {
   private readonly dispatcher: EventDispatcher
   private readonly channelTypeMap = new Map<string, string>()
   private readonly userNameCache = new Map<string, string>()
-  private pendingWebhookOptions?: WebhookOptions
+  private readonly webhookContext = new AsyncLocalStorage<WebhookOptions | undefined>()
 
   get userName(): string {
     return this.resolvedUserName
@@ -661,7 +662,7 @@ export class LarkAdapter implements Adapter<LarkThreadId, LarkRaw> {
       return
     }
     const msg = data.message
-    const options = this.pendingWebhookOptions
+    const options = this.webhookContext.getStore()
     const threadId = this.encodeThreadId({
       chatId: msg.chat_id,
       rootMessageId: msg.root_id || undefined,
@@ -707,7 +708,7 @@ export class LarkAdapter implements Adapter<LarkThreadId, LarkRaw> {
     if (!data?.message_id) {
       return
     }
-    const options = this.pendingWebhookOptions
+    const options = this.webhookContext.getStore()
     const emojiType = data.reaction_type?.emoji_type ?? ''
     const messageId = data.message_id
     const userId = data.user_id?.open_id ?? ''
@@ -932,14 +933,13 @@ export class LarkAdapter implements Adapter<LarkThreadId, LarkRaw> {
   }
 
   private dispatchEvent(body: LarkWebhookBody, options?: WebhookOptions): void {
-    this.pendingWebhookOptions = options
-    void (this.dispatcher.invoke(body as Record<string, unknown>) as Promise<unknown>)
-      .catch((err: unknown) => {
-        this.logger.error('Event processing error', err)
-      })
-      .finally(() => {
-        this.pendingWebhookOptions = undefined
-      })
+    this.webhookContext.run(options, () => {
+      void (this.dispatcher.invoke(body as Record<string, unknown>) as Promise<unknown>).catch(
+        (err: unknown) => {
+          this.logger.error('Event processing error', err)
+        },
+      )
+    })
   }
 
   private extractImageKey(uploadRes: { image_key?: string } | null): string {
