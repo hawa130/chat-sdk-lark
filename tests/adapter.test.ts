@@ -240,6 +240,13 @@ describe('LarkAdapter', () => {
       await vi.waitFor(() => {
         expect(mockChat.processReaction).toHaveBeenCalledTimes(ONCE)
       })
+      const call = mockChat.processReaction.mock.calls[FIRST_MESSAGE]!
+      const reactionEvent = call[0] as { threadId: string; messageId: string; rawEmoji: string }
+      expect(reactionEvent.threadId).toContain('lark:')
+      expect(reactionEvent.messageId).toBe('om_msg001')
+      expect(reactionEvent.rawEmoji).toBe('THUMBSUP')
+      // Verify threadId decodes back to the chat from getMessage
+      expect(adapter.channelIdFromThreadId(reactionEvent.threadId)).toBe('oc_chat001')
     })
   })
 
@@ -328,6 +335,36 @@ describe('LarkAdapter', () => {
       expect(msg.metadata.dateSent).toBeInstanceOf(Date)
       expect(msg.metadata.edited).toBe(false)
     })
+
+    it('detects edited messages from update_time', () => {
+      const raw = makeRaw({
+        message: {
+          chat_id: 'oc_chat001',
+          chat_type: 'group',
+          content: '{"text":"edited"}',
+          create_time: '1700000000000',
+          message_id: 'om_msg005',
+          message_type: 'text',
+          update_time: '1700000001000',
+        },
+      })
+      expect(adapter.parseMessage(raw).metadata.edited).toBe(true)
+    })
+
+    it('edited is false when update_time equals create_time', () => {
+      const raw = makeRaw({
+        message: {
+          chat_id: 'oc_chat001',
+          chat_type: 'group',
+          content: '{"text":"not edited"}',
+          create_time: '1700000000000',
+          message_id: 'om_msg006',
+          message_type: 'text',
+          update_time: '1700000000000',
+        },
+      })
+      expect(adapter.parseMessage(raw).metadata.edited).toBe(false)
+    })
   })
 
   describe('message sending', () => {
@@ -379,6 +416,41 @@ describe('LarkAdapter', () => {
       const threadId = adapter.encodeThreadId({ chatId: 'oc_chat001' })
       await adapter.editMessage(threadId, 'om_edit1', 'updated text')
       expect(editedId).toBe('om_edit1')
+    })
+
+    it('editMessage with card uses PATCH endpoint', async () => {
+      let patchedId: unknown = undefined
+      let patchBody: unknown = undefined
+      server.use(
+        tokenHandler,
+        createCardHandler,
+        http.patch(`${BASE}/open-apis/im/v1/messages/:id`, async ({ params, request }) => {
+          patchedId = params['id']
+          patchBody = await request.json()
+          return HttpResponse.json({ code: 0 })
+        }),
+      )
+      const card = { children: [], title: 'Updated Card', type: 'card' as const }
+      const threadId = adapter.encodeThreadId({ chatId: 'oc_chat001' })
+      await adapter.editMessage(threadId, 'om_edit_card', card)
+      expect(patchedId).toBe('om_edit_card')
+      expect(patchBody).toMatchObject({ content: expect.any(String) })
+    })
+
+    it('editMessage with PostableCard uses PATCH endpoint', async () => {
+      let patchedId: unknown = undefined
+      server.use(
+        tokenHandler,
+        createCardHandler,
+        http.patch(`${BASE}/open-apis/im/v1/messages/:id`, async ({ params }) => {
+          patchedId = params['id']
+          return HttpResponse.json({ code: 0 })
+        }),
+      )
+      const message = { card: { children: [], title: 'Wrapped', type: 'card' as const } }
+      const threadId = adapter.encodeThreadId({ chatId: 'oc_chat001' })
+      await adapter.editMessage(threadId, 'om_edit_pc', message)
+      expect(patchedId).toBe('om_edit_pc')
     })
 
     it('deleteMessage calls delete API', async () => {
@@ -511,6 +583,121 @@ describe('LarkAdapter', () => {
       const result = await adapter.fetchMessages(threadId)
       expect(result.messages).toHaveLength(ONE_MESSAGE)
       expect(result.nextCursor).toBe('next-tok')
+    })
+
+    it('fetchMessages passes direction as sort_type', async () => {
+      let capturedUrl: URL | undefined
+      server.use(
+        tokenHandler,
+        http.get(`${BASE}/open-apis/im/v1/messages`, ({ request }) => {
+          capturedUrl = new URL(request.url)
+          return HttpResponse.json({
+            code: 0,
+            data: { has_more: false, items: [] },
+          })
+        }),
+      )
+      const threadId = adapter.encodeThreadId({ chatId: 'oc_chat001' })
+      await adapter.fetchMessages(threadId, { direction: 'backward' })
+      expect(capturedUrl?.searchParams.get('sort_type')).toBe('ByCreateTimeDesc')
+    })
+
+    it('fetchMessages forward direction maps to ByCreateTimeAsc', async () => {
+      let capturedUrl: URL | undefined
+      server.use(
+        tokenHandler,
+        http.get(`${BASE}/open-apis/im/v1/messages`, ({ request }) => {
+          capturedUrl = new URL(request.url)
+          return HttpResponse.json({
+            code: 0,
+            data: { has_more: false, items: [] },
+          })
+        }),
+      )
+      const threadId = adapter.encodeThreadId({ chatId: 'oc_chat001' })
+      await adapter.fetchMessages(threadId, { direction: 'forward' })
+      expect(capturedUrl?.searchParams.get('sort_type')).toBe('ByCreateTimeAsc')
+    })
+
+    it('fetchMessages builds author from sender in API response', async () => {
+      server.use(
+        tokenHandler,
+        http.get(`${BASE}/open-apis/im/v1/messages`, () =>
+          HttpResponse.json({
+            code: 0,
+            data: {
+              has_more: false,
+              items: [
+                {
+                  body: { content: '{"text":"from user"}' },
+                  create_time: '1700000000000',
+                  message_id: 'om_s1',
+                  sender: { id: 'ou_user1', id_type: 'open_id', sender_type: 'user' },
+                  updated: true,
+                },
+              ],
+            },
+          }),
+        ),
+      )
+      const threadId = adapter.encodeThreadId({ chatId: 'oc_chat001' })
+      const result = await adapter.fetchMessages(threadId)
+      const msg = result.messages[FIRST_MESSAGE]!
+      expect(msg.author.userId).toBe('ou_user1')
+      expect(msg.author.isBot).toBe(false)
+      expect(msg.author.isMe).toBe(false)
+      expect(msg.metadata.edited).toBe(true)
+    })
+
+    it('fetchMessages returns unknownAuthor when sender is absent', async () => {
+      server.use(
+        tokenHandler,
+        http.get(`${BASE}/open-apis/im/v1/messages`, () =>
+          HttpResponse.json({
+            code: 0,
+            data: {
+              has_more: false,
+              items: [
+                {
+                  body: { content: '{"text":"no sender"}' },
+                  create_time: '1700000000000',
+                  message_id: 'om_ns',
+                },
+              ],
+            },
+          }),
+        ),
+      )
+      const threadId = adapter.encodeThreadId({ chatId: 'oc_chat001' })
+      const result = await adapter.fetchMessages(threadId)
+      expect(result.messages[FIRST_MESSAGE]!.author.isBot).toBe('unknown')
+    })
+
+    it('fetchMessages identifies app sender as bot', async () => {
+      server.use(
+        tokenHandler,
+        http.get(`${BASE}/open-apis/im/v1/messages`, () =>
+          HttpResponse.json({
+            code: 0,
+            data: {
+              has_more: false,
+              items: [
+                {
+                  body: { content: '{"text":"bot msg"}' },
+                  create_time: '1700000000000',
+                  message_id: 'om_bot',
+                  sender: { id: 'ou_bot001', id_type: 'app_id', sender_type: 'app' },
+                },
+              ],
+            },
+          }),
+        ),
+      )
+      const threadId = adapter.encodeThreadId({ chatId: 'oc_chat001' })
+      const result = await adapter.fetchMessages(threadId)
+      const msg = result.messages[FIRST_MESSAGE]!
+      expect(msg.author.isBot).toBe(true)
+      expect(msg.author.isMe).toBe(true)
     })
 
     it('fetchThread returns thread info', async () => {
@@ -688,21 +875,51 @@ describe('LarkAdapter', () => {
   })
 
   describe('channel, visibility, and ephemeral', () => {
-    it('postEphemeral sends to correct user', async () => {
+    it('postEphemeral sends text wrapped as markdown card', async () => {
       const adapter = makeAdapter()
       await initAdapter(adapter)
-      let captured: unknown = undefined
+      let captured: Record<string, unknown> | undefined
       server.use(
         tokenHandler,
         http.post(`${BASE}/open-apis/ephemeral/v1/send`, async ({ request }) => {
-          captured = await request.json()
+          captured = (await request.json()) as Record<string, unknown>
           return HttpResponse.json({ code: 0 })
         }),
       )
       const threadId = adapter.encodeThreadId({ chatId: 'oc_chat001' })
       const result = await adapter.postEphemeral(threadId, 'ou_user1', 'secret msg')
-      expect(captured).toMatchObject({ chat_id: 'oc_chat001', open_id: 'ou_user1' })
+      expect(captured).toMatchObject({
+        chat_id: 'oc_chat001',
+        msg_type: 'interactive',
+        open_id: 'ou_user1',
+      })
+      const card = captured!['card'] as {
+        body?: { elements?: Array<{ content?: string; tag?: string }> }
+        schema?: string
+      }
+      expect(card.schema).toBe('2.0')
+      expect(card.body?.elements?.[FIRST_MESSAGE]?.tag).toBe('markdown')
+      expect(card.body?.elements?.[FIRST_MESSAGE]?.content).toBe('secret msg')
       expect(result.usedFallback).toBe(false)
+    })
+
+    it('postEphemeral sends CardElement as interactive card', async () => {
+      const adapter = makeAdapter()
+      await initAdapter(adapter)
+      let captured: Record<string, unknown> | undefined
+      server.use(
+        tokenHandler,
+        createCardHandler,
+        http.post(`${BASE}/open-apis/ephemeral/v1/send`, async ({ request }) => {
+          captured = (await request.json()) as Record<string, unknown>
+          return HttpResponse.json({ code: 0 })
+        }),
+      )
+      const card = { children: [], title: 'Ephemeral Card', type: 'card' as const }
+      const threadId = adapter.encodeThreadId({ chatId: 'oc_chat001' })
+      await adapter.postEphemeral(threadId, 'ou_user1', card)
+      const cardObj = captured!['card'] as { schema?: string }
+      expect(cardObj.schema).toBe('2.0')
     })
 
     it('botUserId is set from bot info after initialization', async () => {

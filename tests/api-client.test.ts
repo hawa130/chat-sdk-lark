@@ -256,6 +256,25 @@ describe('LarkApiClient', () => {
       expect(captured).toMatchObject({ content: 'Hello world', sequence })
     })
 
+    it('patchCard — updates card via PATCH endpoint', async () => {
+      let patchedId: unknown = undefined
+      let captured: unknown = undefined
+      server.use(
+        tokenHandler,
+        http.patch(`${BASE}/open-apis/im/v1/messages/:id`, async ({ params, request }) => {
+          patchedId = params['id']
+          captured = await request.json()
+          return HttpResponse.json({ code: 0 })
+        }),
+      )
+
+      const client = makeClient()
+      await client.patchCard('om_card1', '{"schema":"2.0"}')
+
+      expect(patchedId).toBe('om_card1')
+      expect(captured).toMatchObject({ content: '{"schema":"2.0"}' })
+    })
+
     it('updateCardSettings — updates card config', async () => {
       const sequence = 2
       let captured: unknown = undefined

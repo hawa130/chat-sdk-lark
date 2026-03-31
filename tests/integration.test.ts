@@ -5,12 +5,12 @@
  * webhooks through chat.webhooks.lark() — not adapter.handleWebhook().
  */
 import { HttpResponse, http } from 'msw'
-import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest'
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import { fixtures } from './fixtures.ts'
 import { server } from './setup.ts'
 import { createLarkTestContext } from './test-utils.ts'
 
-const { makeDMEvent, makeMessageEvent } = fixtures
+const { makeDMEvent, makeMessageEvent, makeReactionEvent } = fixtures
 
 const BASE = 'https://open.feishu.cn'
 const TOKEN_URL = `${BASE}/open-apis/auth/v3/tenant_access_token/internal`
@@ -139,9 +139,38 @@ describe('integration: Chat → Lark adapter pipeline', () => {
     expect(ctx.captured.dmThread).not.toBeNull()
   })
 
-  // NOTE: Reaction routing is not tested here.
-  // Lark's reaction event lacks chat_id, so threadId is empty.
-  // See adapter.test.ts for reaction coverage.
+  it('reaction: emoji reaction fires onReaction with correct data', async () => {
+    server.use(
+      tokenHandler,
+      http.get(`${BASE}/open-apis/im/v1/messages/:message_id`, () =>
+        HttpResponse.json({
+          code: 0,
+          data: {
+            items: [{ chat_id: 'oc_chat001', message_id: 'om_msg001', root_id: '' }],
+          },
+        }),
+      ),
+    )
+
+    let capturedEmoji = ''
+    let capturedAdded: boolean | undefined
+
+    const ctx = createLarkTestContext({
+      onReaction: async (event) => {
+        capturedEmoji = event.rawEmoji
+        capturedAdded = event.added
+      },
+    })
+
+    await ctx.chat.initialize()
+    await ctx.sendWebhook(makeReactionEvent('created'))
+
+    // Wait for async threadId resolution before assertion
+    await vi.waitFor(() => {
+      expect(capturedEmoji).toBe('THUMBSUP')
+    })
+    expect(capturedAdded).toBe(true)
+  })
 
   it('rate limit: API 429 propagates AdapterRateLimitError', async () => {
     server.use(
