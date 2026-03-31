@@ -1191,4 +1191,138 @@ describe('LarkAdapter', () => {
       expect(info.channelVisibility).toBe('private')
     })
   })
+
+  describe('lookupUser cache', () => {
+    const USER_CACHE_TTL_MS = 8 * 24 * 60 * 60 * 1000
+    const FAILED_LOOKUP_TTL_MS = 1 * 24 * 60 * 60 * 1000
+
+    const makeUserEvent = (openId: string) =>
+      makeMessageEvent({
+        event: {
+          message: {
+            chat_id: 'oc_chat001',
+            chat_type: 'group',
+            content: '{"text":"hello"}',
+            create_time: '1700000000000',
+            message_id: `om_msg_${openId}`,
+            message_type: 'text',
+          },
+          sender: {
+            sender_id: { open_id: openId },
+            sender_type: 'user',
+          },
+        },
+      })
+
+    const executeFactory = async (mockChat: ReturnType<typeof makeMockChat>) => {
+      const calls = mockChat.processMessage.mock.calls
+      const factory = calls[calls.length - 1]![2]
+      return (factory as () => Promise<unknown>)()
+    }
+
+    it('resolves user name from API on cache miss', async () => {
+      const adapter = makeAdapter()
+      const mockChat = await initAdapter(adapter)
+
+      await adapter.handleWebhook(makeRequest(makeUserEvent('ou_user1')))
+      await executeFactory(mockChat)
+
+      const userSetCalls = mockChat._state.set.mock.calls.filter(([key]: [string]) =>
+        key.startsWith('lark:user:'),
+      )
+      expect(userSetCalls.length).toBeGreaterThanOrEqual(1)
+      const [key, value, ttl] = userSetCalls[0]!
+      expect(key).toBe('lark:user:ou_user1')
+      expect(value).toEqual({ name: 'Alice' })
+      expect(ttl).toBe(USER_CACHE_TTL_MS)
+    })
+
+    it('uses state adapter cache on memory miss', async () => {
+      const adapter = makeAdapter()
+      const mockChat = await initAdapter(adapter)
+
+      mockChat._state.get.mockResolvedValueOnce({ name: 'CachedBob' })
+
+      await adapter.handleWebhook(makeRequest(makeUserEvent('ou_user2')))
+      const msg = await executeFactory(mockChat)
+
+      expect((msg as { author: { fullName: string } }).author.fullName).toBe('CachedBob')
+    })
+
+    it('uses in-memory cache on repeated calls', async () => {
+      const adapter = makeAdapter()
+      const mockChat = await initAdapter(adapter)
+
+      // First call: API lookup, seeds in-memory cache
+      await adapter.handleWebhook(makeRequest(makeUserEvent('ou_user1')))
+      await executeFactory(mockChat)
+
+      // Clear state mock history — second call should hit in-memory cache
+      mockChat._state.get.mockClear()
+
+      await adapter.handleWebhook(makeRequest(makeUserEvent('ou_user1')))
+      await executeFactory(mockChat)
+
+      // state.get should not have been called — in-memory cache handled it
+      expect(mockChat._state.get).not.toHaveBeenCalledWith('lark:user:ou_user1')
+    })
+
+    it('caches failed lookup with short TTL', async () => {
+      const adapter = makeAdapter()
+      const mockChat = await initAdapter(adapter)
+
+      server.use(
+        http.get(`${BASE}/open-apis/contact/v3/users/:userId`, () =>
+          HttpResponse.json({ code: 1 }, { status: 500 }),
+        ),
+      )
+
+      await adapter.handleWebhook(makeRequest(makeUserEvent('ou_user_bad')))
+      await executeFactory(mockChat)
+
+      const userSetCalls = mockChat._state.set.mock.calls.filter(([key]: [string]) =>
+        key.startsWith('lark:user:'),
+      )
+      expect(userSetCalls.length).toBeGreaterThanOrEqual(1)
+      const [key, value, ttl] = userSetCalls[0]!
+      expect(key).toBe('lark:user:ou_user_bad')
+      expect(value).toEqual({ name: 'ou_user_bad' })
+      expect(ttl).toBe(FAILED_LOOKUP_TTL_MS)
+    })
+
+    it('seeds cache from webhook mentions', async () => {
+      const adapter = makeAdapter()
+      const mockChat = await initAdapter(adapter)
+
+      const eventWithMention = makeMessageEvent({
+        event: {
+          message: {
+            chat_id: 'oc_chat001',
+            chat_type: 'group',
+            content: '{"text":"@_user_1 hi"}',
+            create_time: '1700000000000',
+            mentions: [
+              { id: { open_id: 'ou_mentioned1' }, key: '@_user_1', name: 'MentionedAlice' },
+            ],
+            message_id: 'om_mention_test',
+            message_type: 'text',
+          },
+          sender: {
+            sender_id: { open_id: 'ou_sender1' },
+            sender_type: 'user',
+          },
+        },
+      })
+
+      await adapter.handleWebhook(makeRequest(eventWithMention))
+      await executeFactory(mockChat)
+
+      const mentionSetCall = mockChat._state.set.mock.calls.find(
+        ([key]: [string]) => key === 'lark:user:ou_mentioned1',
+      )
+      expect(mentionSetCall).toBeDefined()
+      expect(mentionSetCall![1]).toEqual({ name: 'MentionedAlice' })
+      expect(mentionSetCall![2]).toBe(USER_CACHE_TTL_MS)
+    })
+  })
 })
