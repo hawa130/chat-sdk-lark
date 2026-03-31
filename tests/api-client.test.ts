@@ -152,6 +152,20 @@ describe('LarkApiClient', () => {
   })
 
   describe('error mapping', () => {
+    it('Lark code 99991400 in HTTP 200 → AdapterRateLimitError', async () => {
+      server.use(
+        tokenHandler,
+        http.post(`${BASE}/open-apis/im/v1/messages`, () =>
+          HttpResponse.json({ code: 99991400, msg: 'rate limit exceeded' }),
+        ),
+      )
+
+      const client = makeClient()
+      await expect(client.sendMessage('oc_chat1', 'text', '{"text":"hi"}')).rejects.toMatchObject({
+        name: 'AdapterRateLimitError',
+      })
+    })
+
     it('429 response → AdapterRateLimitError', async () => {
       server.use(
         tokenHandler,

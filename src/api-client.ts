@@ -268,11 +268,18 @@ class LarkApiClient {
   }
 
   private async call<Result>(fn: () => Promise<Result>): Promise<Result> {
+    let result: Result
     try {
-      return await fn()
+      result = await fn()
     } catch (error: unknown) {
       throw mapError(error)
     }
+    const code = (result as { code?: number } | null)?.code
+    if (typeof code === 'number' && code !== 0) {
+      const matched = matchLarkError(undefined, code)
+      if (matched) throw matched
+    }
+    return result
   }
 }
 

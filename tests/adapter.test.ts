@@ -496,6 +496,64 @@ describe('LarkAdapter', () => {
       })
       expect(adapter.parseMessage(raw).metadata.edited).toBe(false)
     })
+
+    it('parses post rich text format', () => {
+      const raw = makeRaw({
+        message: {
+          chat_id: 'oc_chat001',
+          chat_type: 'group',
+          content: JSON.stringify({
+            post: {
+              zh_cn: {
+                content: [
+                  [
+                    { tag: 'text', text: 'Hello' },
+                    { tag: 'a', href: 'https://example.com', text: 'link' },
+                  ],
+                ],
+                title: 'Title',
+              },
+            },
+          }),
+          create_time: '1700000000000',
+          message_id: 'om_msg007',
+          message_type: 'post',
+        },
+      })
+      const message = adapter.parseMessage(raw)
+      expect(message.text).toContain('Hello')
+      expect(message.text).toContain('link')
+    })
+
+    it('handles empty content gracefully', () => {
+      const raw = makeRaw({
+        message: {
+          chat_id: 'oc_chat001',
+          chat_type: 'group',
+          content: '',
+          create_time: '1700000000000',
+          message_id: 'om_msg008',
+          message_type: 'text',
+        },
+      })
+      expect(() => adapter.parseMessage(raw)).not.toThrow()
+      expect(adapter.parseMessage(raw).text).toBe('')
+    })
+
+    it('handles missing mentions array', () => {
+      const raw = makeRaw({
+        message: {
+          chat_id: 'oc_chat001',
+          chat_type: 'group',
+          content: '{"text":"no mentions here"}',
+          create_time: '1700000000000',
+          message_id: 'om_msg009',
+          message_type: 'text',
+        },
+      })
+      expect(() => adapter.parseMessage(raw)).not.toThrow()
+      expect(adapter.parseMessage(raw).text).toBe('no mentions here')
+    })
   })
 
   describe('message sending', () => {
