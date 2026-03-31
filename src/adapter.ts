@@ -23,9 +23,13 @@ import type {
 } from 'chat'
 import type {
   LarkAdapterConfig,
+  LarkAudioContent,
   LarkCardActionBody,
   LarkCardBody,
+  LarkFileContent,
   LarkFileType,
+  LarkImageContent,
+  LarkMediaContent,
   LarkMessageItem,
   LarkRaw,
   LarkRawMessage,
@@ -150,7 +154,7 @@ const unknownAuthor = () => ({
 
 const minimalUser = (userId: string) => ({
   fullName: '',
-  isBot: false as const,
+  isBot: false,
   isMe: false,
   userId,
   userName: '',
@@ -623,64 +627,53 @@ export class LarkAdapter implements Adapter<LarkThreadId, LarkRaw> {
 
   private buildAttachments(messageId: string, messageType: string, content: string): Attachment[] {
     try {
-      const parsed = JSON.parse(content) as Record<string, unknown>
       switch (messageType) {
         case 'image': {
-          const imageKey = parsed.image_key as string
+          const { image_key } = JSON.parse(content) as LarkImageContent
           return [
             {
-              type: 'image' as const,
+              type: 'image',
               fetchData: async () => {
-                const res = await this.api.downloadResource(messageId, imageKey, 'image')
-                return streamToBuffer(
-                  (res as { getReadableStream: () => Readable }).getReadableStream(),
-                )
+                const res = await this.api.downloadResource(messageId, image_key, 'image')
+                return streamToBuffer(res.getReadableStream())
               },
             },
           ]
         }
         case 'file': {
-          const fileKey = parsed.file_key as string
-          const fileName = parsed.file_name as string
+          const { file_key, file_name } = JSON.parse(content) as LarkFileContent
           return [
             {
-              type: 'file' as const,
-              name: fileName,
+              type: 'file',
+              name: file_name,
               fetchData: async () => {
-                const res = await this.api.downloadResource(messageId, fileKey, 'file')
-                return streamToBuffer(
-                  (res as { getReadableStream: () => Readable }).getReadableStream(),
-                )
+                const res = await this.api.downloadResource(messageId, file_key, 'file')
+                return streamToBuffer(res.getReadableStream())
               },
             },
           ]
         }
         case 'audio': {
-          const fileKey = parsed.file_key as string
+          const { file_key } = JSON.parse(content) as LarkAudioContent
           return [
             {
-              type: 'audio' as const,
+              type: 'audio',
               fetchData: async () => {
-                const res = await this.api.downloadResource(messageId, fileKey, 'file')
-                return streamToBuffer(
-                  (res as { getReadableStream: () => Readable }).getReadableStream(),
-                )
+                const res = await this.api.downloadResource(messageId, file_key, 'file')
+                return streamToBuffer(res.getReadableStream())
               },
             },
           ]
         }
         case 'media': {
-          const fileKey = parsed.file_key as string
-          const fileName = parsed.file_name as string
+          const { file_key, file_name } = JSON.parse(content) as LarkMediaContent
           return [
             {
-              type: 'video' as const,
-              name: fileName,
+              type: 'video',
+              name: file_name,
               fetchData: async () => {
-                const res = await this.api.downloadResource(messageId, fileKey, 'file')
-                return streamToBuffer(
-                  (res as { getReadableStream: () => Readable }).getReadableStream(),
-                )
+                const res = await this.api.downloadResource(messageId, file_key, 'file')
+                return streamToBuffer(res.getReadableStream())
               },
             },
           ]
@@ -713,7 +706,7 @@ export class LarkAdapter implements Adapter<LarkThreadId, LarkRaw> {
 
     try {
       const res = await this.api.getUser(openId)
-      const name = (res as { data?: { user?: { name?: string } } }).data?.user?.name ?? openId
+      const name = res.data?.user?.name ?? openId
       this.userNameCache.set(openId, name)
       await state.set(cacheKey, { name }, USER_CACHE_TTL_MS)
       return name

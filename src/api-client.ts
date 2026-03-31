@@ -79,7 +79,7 @@ class LarkApiClient {
     const base = {
       appId: config.appId,
       appSecret: config.appSecret,
-      appType: config.appType ?? (AppType.SelfBuild as const),
+      appType: config.appType ?? AppType.SelfBuild,
       cache: config.cache,
       disableTokenCache: config.disableTokenCache,
       domain: config.domain ?? Domain.Feishu,
@@ -210,29 +210,32 @@ class LarkApiClient {
     )
   }
 
-  async downloadResource(messageId: string, fileKey: string, type: 'file' | 'image') {
+  async downloadResource(
+    messageId: string,
+    fileKey: string,
+    type: 'file' | 'image',
+  ): Promise<{ getReadableStream: () => import('node:stream').Readable }> {
     return this.call(() =>
       this.client.im.messageResource.get({
         path: { message_id: messageId, file_key: fileKey },
         params: { type },
       }),
-    )
+    ) as Promise<{ getReadableStream: () => import('node:stream').Readable }>
   }
 
-  async getBotInfo() {
-    const res = await this.call(() =>
+  async getBotInfo(): Promise<{ bot?: { app_name?: string; open_id?: string } }> {
+    return this.call(() =>
       this.client.request({ method: 'GET', url: '/open-apis/bot/v3/info' }),
-    )
-    return res as { bot?: { app_name?: string; open_id?: string } }
+    ) as Promise<{ bot?: { app_name?: string; open_id?: string } }>
   }
 
-  async getUser(openId: string) {
+  async getUser(openId: string): Promise<{ data?: { user?: { name?: string } } }> {
     return this.call(() =>
       this.client.contact.user.get({
         path: { user_id: openId },
         params: { user_id_type: 'open_id' },
       }),
-    )
+    ) as Promise<{ data?: { user?: { name?: string } } }>
   }
 
   async sendEphemeral(chatId: string, userId: string, card: LarkCardBody) {
