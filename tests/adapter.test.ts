@@ -46,31 +46,45 @@ const createCardHandler = http.post(`${BASE}/open-apis/cardkit/v1/cards`, () =>
   HttpResponse.json({ code: 0, data: { card_id: 'card_test_001' } }),
 )
 
+const userInfoHandler = http.get(`${BASE}/open-apis/contact/v3/users/:userId`, () =>
+  HttpResponse.json({ code: 0, data: { user: { name: 'Alice' } } }),
+)
+
 const makeAdapter = () =>
   new LarkAdapter({
     appId: 'test-app-id',
     appSecret: 'test-app-secret',
   })
 
-const makeMockChat = () => ({
-  getState: vi.fn(),
-  getUserName: () => 'TestBot',
-  handleIncomingMessage: vi.fn(),
-  processAction: vi.fn(),
-  processAppHomeOpened: vi.fn(),
-  processAssistantContextChanged: vi.fn(),
-  processAssistantThreadStarted: vi.fn(),
-  processMemberJoinedChannel: vi.fn(),
-  processMessage: vi.fn(),
-  processModalClose: vi.fn(),
-  processModalSubmit: vi.fn(),
-  processReaction: vi.fn(),
-  processSlashCommand: vi.fn(),
+const makeMockState = () => ({
+  delete: vi.fn().mockResolvedValue(undefined),
+  get: vi.fn().mockResolvedValue(null),
+  set: vi.fn().mockResolvedValue(undefined),
 })
+
+const makeMockChat = () => {
+  const mockState = makeMockState()
+  return {
+    _state: mockState,
+    getState: () => mockState,
+    getUserName: () => 'TestBot',
+    handleIncomingMessage: vi.fn(),
+    processAction: vi.fn(),
+    processAppHomeOpened: vi.fn(),
+    processAssistantContextChanged: vi.fn(),
+    processAssistantThreadStarted: vi.fn(),
+    processMemberJoinedChannel: vi.fn(),
+    processMessage: vi.fn(),
+    processModalClose: vi.fn(),
+    processModalSubmit: vi.fn(),
+    processReaction: vi.fn(),
+    processSlashCommand: vi.fn(),
+  }
+}
 
 const initAdapter = async (adapter: LarkAdapter) => {
   const mockChat = makeMockChat()
-  server.use(tokenHandler, botInfoHandler, createCardHandler)
+  server.use(tokenHandler, botInfoHandler, createCardHandler, userInfoHandler)
   await adapter.initialize(mockChat as never)
   return mockChat
 }
@@ -195,6 +209,23 @@ describe('LarkAdapter', () => {
       expect((await adapter.handleWebhook(req)).status).toBe(HTTP_OK)
     })
 
+    it('routes message event to processMessage with factory', async () => {
+      const adapter = makeAdapter()
+      const mockChat = await initAdapter(adapter)
+
+      await adapter.handleWebhook(makeRequest(makeMessageEvent()))
+      expect(mockChat.processMessage).toHaveBeenCalledTimes(ONCE)
+
+      const call = mockChat.processMessage.mock.calls[0]!
+      expect(call[0]).toBe(adapter)
+      expect(call[1]).toMatch(/^lark:/)
+      expect(typeof call[2]).toBe('function')
+
+      // Execute factory to get message
+      const message = await (call[2] as () => Promise<unknown>)()
+      expect((message as { text: string }).text).toContain('hello bot')
+    })
+
     it('routes reaction event to processReaction', async () => {
       const adapter = makeAdapter()
       const mockChat = await initAdapter(adapter)
@@ -221,15 +252,22 @@ describe('LarkAdapter', () => {
       const res = await adapter.handleWebhook(makeRequest(event), options)
       expect(res.status).toBe(HTTP_OK)
       await Promise.allSettled(promises)
-      // Wait for async threadId resolution
+      // Wait for async threadId + user resolution
       await vi.waitFor(() => {
         expect(mockChat.processReaction).toHaveBeenCalledTimes(ONCE)
       })
       const call = mockChat.processReaction.mock.calls[FIRST_MESSAGE]!
-      const reactionEvent = call[0] as { threadId: string; messageId: string; rawEmoji: string }
+      const reactionEvent = call[0] as {
+        threadId: string
+        messageId: string
+        rawEmoji: string
+        user: { fullName: string; userName: string }
+      }
       expect(reactionEvent.threadId).toContain('lark:')
       expect(reactionEvent.messageId).toBe('om_msg001')
       expect(reactionEvent.rawEmoji).toBe('THUMBSUP')
+      expect(reactionEvent.user.fullName).toBe('Alice')
+      expect(reactionEvent.user.userName).toBe('Alice')
       // Verify threadId decodes back to the chat from getMessage
       expect(adapter.channelIdFromThreadId(reactionEvent.threadId)).toBe('oc_chat001')
     })
@@ -748,6 +786,8 @@ describe('LarkAdapter', () => {
       const result = await adapter.fetchMessages(threadId)
       const msg = result.messages[FIRST_MESSAGE]!
       expect(msg.author.userId).toBe('ou_user1')
+      expect(msg.author.fullName).toBe('Alice')
+      expect(msg.author.userName).toBe('Alice')
       expect(msg.author.isBot).toBe(false)
       expect(msg.author.isMe).toBe(false)
       expect(msg.metadata.edited).toBe(true)

@@ -211,6 +211,8 @@ const directionToSortType = (direction?: string): LarkSortType | undefined => {
   return undefined
 }
 
+const USER_CACHE_TTL_MS = 8 * 24 * 60 * 60 * 1000
+const FAILED_LOOKUP_TTL_MS = 1 * 24 * 60 * 60 * 1000
 const EPHEMERAL_ELEMENT_ID = 'eph_md'
 
 export class LarkAdapter implements Adapter<LarkThreadId, LarkRaw> {
@@ -226,6 +228,7 @@ export class LarkAdapter implements Adapter<LarkThreadId, LarkRaw> {
   private readonly converter = new LarkFormatConverter()
   private readonly dispatcher: EventDispatcher
   private readonly dmCache = new Set<string>()
+  private readonly userNameCache = new Map<string, string>()
   private pendingWebhookOptions?: WebhookOptions
 
   get userName(): string {
@@ -266,7 +269,9 @@ export class LarkAdapter implements Adapter<LarkThreadId, LarkRaw> {
     this.logger.info('Initialized', { botOpenId: this.botOpenId })
   }
 
-  async disconnect(): Promise<void> {}
+  async disconnect(): Promise<void> {
+    this.userNameCache.clear()
+  }
 
   // -- Thread ID encoding --
 
@@ -407,7 +412,7 @@ export class LarkAdapter implements Adapter<LarkThreadId, LarkRaw> {
     const sortType = directionToSortType(options?.direction)
     const res = await this.api.listMessages(chatId, options?.cursor, options?.limit, sortType)
     const items = res.data?.items ?? []
-    const messages = items.map((item) => this.itemToMessage(item, threadId))
+    const messages = await Promise.all(items.map((item) => this.itemToMessage(item, threadId)))
     return {
       messages,
       nextCursor: (res.data?.has_more && res.data.page_token) || undefined,
@@ -433,7 +438,7 @@ export class LarkAdapter implements Adapter<LarkThreadId, LarkRaw> {
     if (!item) {
       return null
     }
-    return this.itemToMessage(item, threadId)
+    return await this.itemToMessage(item, threadId)
   }
 
   async fetchChannelInfo(channelId: string): Promise<ChannelInfo> {
@@ -456,7 +461,7 @@ export class LarkAdapter implements Adapter<LarkThreadId, LarkRaw> {
     const res = await this.api.listMessages(channelId, options?.cursor, options?.limit, sortType)
     const items = res.data?.items ?? []
     const threadId = this.encodeThreadId({ chatId: channelId })
-    const messages = items.map((item) => this.itemToMessage(item, threadId))
+    const messages = await Promise.all(items.map((item) => this.itemToMessage(item, threadId)))
     return {
       messages,
       nextCursor: (res.data?.has_more && res.data.page_token) || undefined,
@@ -595,6 +600,32 @@ export class LarkAdapter implements Adapter<LarkThreadId, LarkRaw> {
 
   // -- Private helpers --
 
+  private async lookupUser(openId: string): Promise<string> {
+    const memCached = this.userNameCache.get(openId)
+    if (memCached) return memCached
+
+    const state = this.chat.getState()
+    const cacheKey = `lark:user:${openId}`
+    const cached = await state.get<{ name: string }>(cacheKey)
+    if (cached) {
+      this.userNameCache.set(openId, cached.name)
+      return cached.name
+    }
+
+    try {
+      const res = await this.api.getUser(openId)
+      const name = (res as { data?: { user?: { name?: string } } }).data?.user?.name ?? openId
+      this.userNameCache.set(openId, name)
+      await state.set(cacheKey, { name }, USER_CACHE_TTL_MS)
+      return name
+    } catch {
+      this.logger.warn('Failed to lookup user', { openId })
+      this.userNameCache.set(openId, openId)
+      await state.set(cacheKey, { name: openId }, FAILED_LOOKUP_TTL_MS)
+      return openId
+    }
+  }
+
   private registerEventHandlers(): void {
     this.dispatcher.register({
       'im.chat.member.bot.added_v1': (data) => {
@@ -616,8 +647,38 @@ export class LarkAdapter implements Adapter<LarkThreadId, LarkRaw> {
     if (!data?.message) {
       return
     }
-    const message = this.parseMessage(data)
-    this.chat.processMessage(this, message.threadId, message, this.pendingWebhookOptions)
+    const msg = data.message
+    const options = this.pendingWebhookOptions
+    const threadId = this.encodeThreadId({
+      chatId: msg.chat_id,
+      rootMessageId: msg.root_id || undefined,
+    })
+
+    const factory = async (): Promise<Message<LarkRaw>> => {
+      // Seed user cache from mentions (free data)
+      const state = this.chat.getState()
+      for (const mention of msg.mentions ?? []) {
+        if (mention.name && mention.id?.open_id) {
+          this.userNameCache.set(mention.id.open_id, mention.name)
+          void state.set(
+            `lark:user:${mention.id.open_id}`,
+            { name: mention.name },
+            USER_CACHE_TTL_MS,
+          )
+        }
+      }
+
+      const openId = data.sender.sender_id?.open_id ?? ''
+      const resolvedName = openId ? await this.lookupUser(openId) : ''
+      const message = this.parseMessage(data)
+      if (resolvedName) {
+        message.author.fullName = resolvedName
+        message.author.userName = resolvedName
+      }
+      return message
+    }
+
+    this.chat.processMessage(this, threadId, factory, options)
   }
 
   private handleReactionEvent(
@@ -627,12 +688,15 @@ export class LarkAdapter implements Adapter<LarkThreadId, LarkRaw> {
     if (!data?.message_id) {
       return
     }
-    // Capture options synchronously before any async work
     const options = this.pendingWebhookOptions
     const emojiType = data.reaction_type?.emoji_type ?? ''
     const messageId = data.message_id
+    const userId = data.user_id?.open_id ?? ''
 
-    void this.resolveReactionThreadId(messageId).then((threadId) =>
+    void Promise.all([
+      this.resolveReactionThreadId(messageId),
+      userId ? this.lookupUser(userId) : Promise.resolve(''),
+    ]).then(([threadId, resolvedName]) =>
       this.chat.processReaction(
         {
           adapter: this,
@@ -643,11 +707,11 @@ export class LarkAdapter implements Adapter<LarkThreadId, LarkRaw> {
           rawEmoji: emojiType,
           threadId,
           user: {
-            fullName: '',
+            fullName: resolvedName,
             isBot: 'unknown' as const,
             isMe: false,
-            userId: data.user_id?.open_id ?? '',
-            userName: '',
+            userId,
+            userName: resolvedName,
           },
         },
         options,
@@ -980,16 +1044,18 @@ export class LarkAdapter implements Adapter<LarkThreadId, LarkRaw> {
     )
   }
 
-  private itemToMessage(item: LarkMessageItem, threadId: string): Message<LarkRaw> {
+  private async itemToMessage(item: LarkMessageItem, threadId: string): Promise<Message<LarkRaw>> {
     const content = item.body?.content ?? ''
     const sender = item.sender
+    const senderId = sender?.id ?? ''
+    const resolvedName = senderId ? await this.lookupUser(senderId) : 'unknown'
     const author = sender
       ? {
-          fullName: sender.id,
+          fullName: resolvedName,
           isBot: sender.sender_type === 'app',
           isMe: sender.id === this.botOpenId,
           userId: sender.id,
-          userName: sender.id,
+          userName: resolvedName,
         }
       : unknownAuthor()
     return new Message<LarkRaw>({

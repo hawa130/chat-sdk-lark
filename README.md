@@ -80,16 +80,18 @@ app.post('/webhook/lark', async (req, res) => {
 
 Add the following scopes to your app:
 
-| Permission                         | Description                            |
-| ---------------------------------- | -------------------------------------- |
-| `im:message`                       | Read, send, edit, and delete messages  |
-| `im:message.group_at_msg:readonly` | Receive @bot messages in group chats   |
-| `im:message.p2p_msg:readonly`      | Receive direct messages                |
-| `im:message.reactions:read`        | Receive reaction events                |
-| `im:chat:readonly`                 | Read chat info                         |
-| `im:chat:create`                   | Create DM conversations (for `openDM`) |
-| `im:resource`                      | Upload and download images and files   |
-| `contact:user.id:readonly`         | Read user IDs                          |
+| Permission                         | Description                                      |
+| ---------------------------------- | ------------------------------------------------ |
+| `im:message`                       | Read, send, edit, and delete messages            |
+| `im:message.group_at_msg:readonly` | Receive @bot messages in group chats             |
+| `im:message.p2p_msg:readonly`      | Receive direct messages                          |
+| `im:message.reactions:read`        | Receive reaction events                          |
+| `im:chat:readonly`                 | Read chat info                                   |
+| `im:chat:create`                   | Create DM conversations (for `openDM`)           |
+| `im:resource`                      | Upload and download images and files             |
+| `contact:contact.base:readonly`    | Call the contacts API (for user name resolution) |
+| `contact:user.base:readonly`       | Access user display names                        |
+| `contact:user.id:readonly`         | Read user IDs                                    |
 
 ### 4. Publish
 
@@ -201,6 +203,13 @@ LARK_DOMAIN=feishu               # Optional, "feishu" (default) or "lark"
 
 1. Check `encryptKey` if event encryption is enabled in the Lark console
 2. Verify `verificationToken` for v1 event format
+
+### User names showing as IDs
+
+The adapter resolves user display names via the contacts API. If names show as `ou_xxxxx` IDs:
+
+1. Add `contact:contact.base:readonly` and `contact:user.base:readonly` permissions
+2. Expand the app's contact scope (通讯录权限范围) in the Lark admin console to include the users you need
 
 ## Contributing
 

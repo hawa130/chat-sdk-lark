@@ -217,6 +217,15 @@ class LarkApiClient {
     return res as { bot?: { app_name?: string; open_id?: string } }
   }
 
+  async getUser(openId: string) {
+    return this.call(() =>
+      this.client.contact.user.get({
+        path: { user_id: openId },
+        params: { user_id_type: 'open_id' },
+      }),
+    )
+  }
+
   async sendEphemeral(chatId: string, userId: string, card: LarkCardBody) {
     return this.call(() =>
       this.client.request({
