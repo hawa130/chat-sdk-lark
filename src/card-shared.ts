@@ -15,10 +15,10 @@ const mapFieldsToColumns = (fields: FieldLike[], nextId: () => string): LarkColu
           {
             content: `**${field.label ?? ''}**`,
             element_id: nextId(),
-            tag: 'markdown' as const,
+            tag: 'markdown',
           } satisfies LarkMarkdownElement,
         ],
-        tag: 'column' as const,
+        tag: 'column',
         vertical_align: 'top',
         weight: 1,
         width: 'weighted',
@@ -28,18 +28,18 @@ const mapFieldsToColumns = (fields: FieldLike[], nextId: () => string): LarkColu
           {
             content: String(field.value ?? ''),
             element_id: nextId(),
-            tag: 'markdown' as const,
-            text_align: 'right' as const,
+            tag: 'markdown',
+            text_align: 'right',
           } satisfies LarkMarkdownElement,
         ],
-        tag: 'column' as const,
+        tag: 'column',
         vertical_align: 'top',
         weight: 1,
         width: 'weighted',
       },
     ],
     flex_mode: 'none',
-    tag: 'column_set' as const,
+    tag: 'column_set',
   }))
 
 export { mapFieldsToColumns }

@@ -83,7 +83,7 @@ const mapSelect = (child: ModalChild): LarkSelectElement => {
     element_id: nextId(),
     name: child.id ?? nextId(),
     options: (child.options ?? []).map((opt) => ({
-      text: { content: opt.label, tag: 'plain_text' as const },
+      text: { content: opt.label, tag: 'plain_text' },
       value: opt.value,
     })),
     required: child.optional !== true,

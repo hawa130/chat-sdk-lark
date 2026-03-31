@@ -105,7 +105,7 @@ const mapSelect = (child: CardChild): LarkSelectElement => {
     behaviors: [{ type: 'callback', value: { id: child.id ?? '' } }],
     element_id: nextElementId(),
     options: (child.options ?? []).map((opt) => ({
-      text: { content: opt.label ?? '', tag: 'plain_text' as const },
+      text: { content: opt.label ?? '', tag: 'plain_text' },
       value: String(opt.value ?? ''),
     })),
     tag: 'select_static',
@@ -166,7 +166,7 @@ const mapActions = (child: CardChild): LarkColumnSetElement | null => {
     background_style: 'default',
     columns: items.map((item) => ({
       elements: [item],
-      tag: 'column' as const,
+      tag: 'column',
       vertical_align: 'top',
       weight: 1,
       width: 'auto',

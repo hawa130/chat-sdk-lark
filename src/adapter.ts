@@ -323,7 +323,7 @@ export class LarkAdapter implements Adapter<LarkThreadId, LarkRaw> {
   // -- Webhook handling --
 
   async handleWebhook(request: Request, options?: WebhookOptions): Promise<Response> {
-    const body = await this.parseWebhookBody(request.clone() as Request)
+    const body = await this.parseWebhookBody(request.clone())
     if (!body) {
       return new Response('Invalid JSON', { status: HTTP_BAD_REQUEST })
     }
@@ -882,8 +882,8 @@ export class LarkAdapter implements Adapter<LarkThreadId, LarkRaw> {
     options?: WebhookOptions,
   ): void {
     const callbackId = String(action.value?.['__callbackId'] ?? '')
-    const contextId = action.value?.['__contextId'] as string | undefined
-    const privateMetadata = action.value?.['__privateMetadata'] as string | undefined
+    const contextId = action.value?.['__contextId']
+    const privateMetadata = action.value?.['__privateMetadata']
     const values: Record<string, string> = {}
     if (action.form_value) {
       for (const [key, val] of Object.entries(action.form_value)) {
@@ -927,8 +927,8 @@ export class LarkAdapter implements Adapter<LarkThreadId, LarkRaw> {
       return
     }
     const callbackId = String(action.value?.['__callbackId'] ?? '')
-    const contextId = action.value?.['__contextId'] as string | undefined
-    const privateMetadata = action.value?.['__privateMetadata'] as string | undefined
+    const contextId = action.value?.['__contextId']
+    const privateMetadata = action.value?.['__privateMetadata']
 
     this.chat.processModalClose(
       {
