@@ -6,7 +6,7 @@ import {
   PermissionError,
   ResourceNotFoundError,
 } from '@chat-adapter/shared'
-import type { LarkAdapterConfig, LarkCardBody, LarkFileType, LarkSdkError } from './types.ts'
+import type { LarkAdapterConfig, LarkCardBody, LarkFileType } from './types.ts'
 
 type ApiLogger = {
   debug(...args: unknown[]): void
@@ -23,10 +23,66 @@ const HTTP_NOT_FOUND = 404
 const LARK_RATE_LIMIT_CODE = 99991400
 const DEFAULT_PAGE_SIZE = 20
 
-const extractStatus = (err: LarkSdkError): number | undefined =>
-  err.response?.status ?? err.httpCode ?? err.status
+const isObject = (value: unknown): value is object => typeof value === 'object' && value !== null
 
-const extractCode = (err: LarkSdkError): number | undefined => err.code ?? err.response?.data?.code
+const readNumberField = (value: object | undefined, key: string): number | undefined => {
+  if (!value) {
+    return undefined
+  }
+  const field = Reflect.get(value, key)
+  return typeof field === 'number' ? field : undefined
+}
+
+const readStringField = (value: object | undefined, key: string): string | undefined => {
+  if (!value) {
+    return undefined
+  }
+  const field = Reflect.get(value, key)
+  return typeof field === 'string' ? field : undefined
+}
+
+const readObjectField = (value: object | undefined, key: string): object | undefined => {
+  if (!value) {
+    return undefined
+  }
+  const field = Reflect.get(value, key)
+  return typeof field === 'object' && field !== null ? field : undefined
+}
+
+const extractStatus = (error: unknown): number | undefined => {
+  if (!isObject(error)) {
+    return undefined
+  }
+  return (
+    readNumberField(readObjectField(error, 'response'), 'status') ??
+    readNumberField(error, 'httpCode') ??
+    readNumberField(error, 'status')
+  )
+}
+
+const extractCode = (error: unknown): number | undefined => {
+  if (!isObject(error)) {
+    return undefined
+  }
+  return (
+    readNumberField(error, 'code') ??
+    readNumberField(readObjectField(readObjectField(error, 'response'), 'data'), 'code')
+  )
+}
+
+const extractResponseCode = (result: unknown): number | undefined => {
+  if (!isObject(result)) {
+    return undefined
+  }
+  return readNumberField(result, 'code')
+}
+
+const extractResponseMessage = (result: unknown): string | undefined => {
+  if (!isObject(result)) {
+    return undefined
+  }
+  return readStringField(result, 'msg')
+}
 
 const matchLarkError = (
   status: number | undefined,
@@ -48,8 +104,7 @@ const matchLarkError = (
 }
 
 const mapError = (error: unknown): Error => {
-  const err = error as LarkSdkError
-  const matched = matchLarkError(extractStatus(err), extractCode(err))
+  const matched = matchLarkError(extractStatus(error), extractCode(error))
   if (matched) {
     return matched
   }
@@ -288,11 +343,11 @@ class LarkApiClient {
     } catch (error: unknown) {
       throw mapError(error)
     }
-    const code = (result as { code?: number } | null)?.code
+    const code = extractResponseCode(result)
     if (typeof code === 'number' && code !== 0) {
       const matched = matchLarkError(undefined, code)
       if (matched) throw matched
-      const msg = (result as { msg?: string } | null)?.msg ?? 'unknown'
+      const msg = extractResponseMessage(result) ?? 'unknown'
       throw new AdapterError(`Lark API error ${code}: ${msg}`, ADAPTER_NAME, String(code))
     }
     return result

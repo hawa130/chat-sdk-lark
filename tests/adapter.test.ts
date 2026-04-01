@@ -106,6 +106,24 @@ const makeStreamGen = () => {
   }
 }
 
+type SentMessageRequestBody = {
+  content?: string
+  msg_type?: 'file' | 'interactive' | 'text'
+  receive_id?: string
+}
+
+type EphemeralCardPayload = {
+  body?: { elements?: Array<{ content?: string; tag?: string }> }
+  schema?: string
+}
+
+type EphemeralSendPayload = {
+  card?: EphemeralCardPayload
+  chat_id?: string
+  msg_type?: string
+  open_id?: string
+}
+
 beforeAll(() => server.listen({ onUnhandledRequest: 'bypass' }))
 afterEach(() => server.resetHandlers())
 afterAll(() => server.close())
@@ -817,16 +835,16 @@ describe('LarkAdapter', () => {
     })
 
     it('postMessage with files and text returns the text message id', async () => {
-      const sentBodies: Array<Record<string, unknown>> = []
+      const sentBodies: SentMessageRequestBody[] = []
       server.use(
         tokenHandler,
         http.post(`${BASE}/open-apis/im/v1/files`, () =>
           HttpResponse.json({ code: 0, data: { file_key: 'file_test_001' } }),
         ),
         http.post(`${BASE}/open-apis/im/v1/messages`, async ({ request }) => {
-          const body = (await request.json()) as Record<string, unknown>
+          const body = (await request.json()) as SentMessageRequestBody
           sentBodies.push(body)
-          if (body['msg_type'] === 'file') {
+          if (body.msg_type === 'file') {
             return HttpResponse.json({ code: 0, data: { message_id: 'om_file1' } })
           }
           return HttpResponse.json({
@@ -856,14 +874,14 @@ describe('LarkAdapter', () => {
     })
 
     it('postMessage with files only skips empty text sends', async () => {
-      const sentBodies: Array<Record<string, unknown>> = []
+      const sentBodies: SentMessageRequestBody[] = []
       server.use(
         tokenHandler,
         http.post(`${BASE}/open-apis/im/v1/files`, () =>
           HttpResponse.json({ code: 0, data: { file_key: 'file_test_001' } }),
         ),
         http.post(`${BASE}/open-apis/im/v1/messages`, async ({ request }) => {
-          const body = (await request.json()) as Record<string, unknown>
+          const body = (await request.json()) as SentMessageRequestBody
           sentBodies.push(body)
           return HttpResponse.json({ code: 0, data: { message_id: 'om_file_only' } })
         }),
@@ -1501,11 +1519,11 @@ describe('LarkAdapter', () => {
     it('postEphemeral sends text wrapped as markdown card', async () => {
       const adapter = makeAdapter()
       await initAdapter(adapter)
-      let captured: Record<string, unknown> | undefined
+      let captured: EphemeralSendPayload | undefined
       server.use(
         tokenHandler,
         http.post(`${BASE}/open-apis/ephemeral/v1/send`, async ({ request }) => {
-          captured = (await request.json()) as Record<string, unknown>
+          captured = (await request.json()) as EphemeralSendPayload
           return HttpResponse.json({ code: 0 })
         }),
       )
@@ -1516,33 +1534,30 @@ describe('LarkAdapter', () => {
         msg_type: 'interactive',
         open_id: 'ou_user1',
       })
-      const card = captured!['card'] as {
-        body?: { elements?: Array<{ content?: string; tag?: string }> }
-        schema?: string
-      }
-      expect(card.schema).toBe('2.0')
-      expect(card.body?.elements?.[0]?.tag).toBe('markdown')
-      expect(card.body?.elements?.[0]?.content).toBe('secret msg')
+      const card = captured?.card
+      expect(card?.schema).toBe('2.0')
+      expect(card?.body?.elements?.[0]?.tag).toBe('markdown')
+      expect(card?.body?.elements?.[0]?.content).toBe('secret msg')
       expect(result.usedFallback).toBe(false)
     })
 
     it('postEphemeral sends CardElement as interactive card', async () => {
       const adapter = makeAdapter()
       await initAdapter(adapter)
-      let captured: Record<string, unknown> | undefined
+      let captured: EphemeralSendPayload | undefined
       server.use(
         tokenHandler,
         createCardHandler,
         http.post(`${BASE}/open-apis/ephemeral/v1/send`, async ({ request }) => {
-          captured = (await request.json()) as Record<string, unknown>
+          captured = (await request.json()) as EphemeralSendPayload
           return HttpResponse.json({ code: 0 })
         }),
       )
       const card = { children: [], title: 'Ephemeral Card', type: 'card' as const }
       const threadId = adapter.encodeThreadId({ chatId: 'oc_chat001' })
       await adapter.postEphemeral(threadId, 'ou_user1', card)
-      const cardObj = captured!['card'] as { schema?: string }
-      expect(cardObj.schema).toBe('2.0')
+      const cardObj = captured?.card
+      expect(cardObj?.schema).toBe('2.0')
     })
 
     it('botUserId is set from bot info after initialization', async () => {
