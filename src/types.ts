@@ -3,7 +3,7 @@ import type { Logger } from 'chat'
 
 interface LarkThreadId {
   chatId: string
-  rootMessageId?: string
+  threadId?: string
 }
 
 interface LarkAdapterConfig {

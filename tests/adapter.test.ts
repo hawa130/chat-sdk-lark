@@ -119,11 +119,11 @@ describe('LarkAdapter', () => {
       expect(threadId.split(':')).toHaveLength(2)
     })
 
-    it('encodes chatId + rootMessageId', () => {
+    it('encodes chatId + threadId', () => {
       const adapter = makeAdapter()
       const threadId = adapter.encodeThreadId({
         chatId: 'oc_chat001',
-        rootMessageId: 'om_msg001',
+        threadId: 'omt_thread001',
       })
       expect(threadId.split(':')).toHaveLength(3)
     })
@@ -134,12 +134,12 @@ describe('LarkAdapter', () => {
       const threadId = adapter.encodeThreadId(original)
       const decoded = adapter.decodeThreadId(threadId)
       expect(decoded.chatId).toBe('oc_chat001')
-      expect(decoded.rootMessageId).toBeUndefined()
+      expect(decoded.threadId).toBeUndefined()
     })
 
-    it('decode round-trips with chatId + rootMessageId', () => {
+    it('decode round-trips with chatId + threadId', () => {
       const adapter = makeAdapter()
-      const original = { chatId: 'oc_chat001', rootMessageId: 'om_msg001' }
+      const original = { chatId: 'oc_chat001', threadId: 'omt_thread001' }
       const threadId = adapter.encodeThreadId(original)
       expect(adapter.decodeThreadId(threadId)).toEqual(original)
     })
@@ -240,6 +240,42 @@ describe('LarkAdapter', () => {
       expect((message as { text: string }).text).toContain('hello bot')
     })
 
+    it('extracts thread_id from message events', async () => {
+      const adapter = makeAdapter()
+      const mockChat = await initAdapter(adapter)
+
+      await adapter.handleWebhook(
+        makeRequest(
+          makeMessageEvent({
+            event: {
+              message: {
+                chat_id: 'oc_chat001',
+                chat_type: 'group',
+                content: '{"text":"threaded"}',
+                create_time: '1700000000000',
+                message_id: 'om_msg_thread',
+                message_type: 'text',
+                root_id: 'om_root001',
+                thread_id: 'omt_thread001',
+              },
+              sender: {
+                sender_id: { open_id: 'ou_user1' },
+                sender_type: 'user',
+              },
+            },
+          }),
+        ),
+      )
+
+      const factory = mockChat.processMessage.mock.calls[0]![2]
+      const message = (await (
+        factory as () => Promise<{
+          threadId: string
+        }>
+      )()) as { threadId: string }
+      expect(adapter.decodeThreadId(message.threadId).threadId).toBe('omt_thread001')
+    })
+
     it('routes reaction event to processReaction', async () => {
       const adapter = makeAdapter()
       const mockChat = await initAdapter(adapter)
@@ -249,7 +285,14 @@ describe('LarkAdapter', () => {
           HttpResponse.json({
             code: 0,
             data: {
-              items: [{ chat_id: 'oc_chat001', message_id: 'om_msg001', root_id: '' }],
+              items: [
+                {
+                  chat_id: 'oc_chat001',
+                  message_id: 'om_msg001',
+                  root_id: 'om_root001',
+                  thread_id: 'omt_thread001',
+                },
+              ],
             },
           }),
         ),
@@ -284,17 +327,37 @@ describe('LarkAdapter', () => {
       expect(reactionEvent.user.userName).toBe('Alice')
       // Verify threadId decodes back to the chat from getMessage
       expect(adapter.channelIdFromThreadId(reactionEvent.threadId)).toBe('oc_chat001')
+      expect(adapter.decodeThreadId(reactionEvent.threadId).threadId).toBe('omt_thread001')
     })
 
     it('routes card.action.trigger to processAction', async () => {
       const adapter = makeAdapter()
       const mockChat = await initAdapter(adapter)
+      server.use(
+        http.get(`${BASE}/open-apis/im/v1/messages/:message_id`, () =>
+          HttpResponse.json({
+            code: 0,
+            data: {
+              items: [
+                {
+                  chat_id: 'oc_chat001',
+                  message_id: 'om_card_msg001',
+                  root_id: 'om_root001',
+                  thread_id: 'omt_thread001',
+                },
+              ],
+            },
+          }),
+        ),
+      )
 
       const event = makeCardActionEvent('approve', 'order_123')
       const res = await adapter.handleWebhook(makeRequest(event))
       expect(res.status).toBe(200)
       expect(await res.json()).toEqual({})
-      expect(mockChat.processAction).toHaveBeenCalledTimes(1)
+      await vi.waitFor(() => {
+        expect(mockChat.processAction).toHaveBeenCalledTimes(1)
+      })
 
       const call = mockChat.processAction.mock.calls[0]!
       const actionEvent = call[0] as {
@@ -309,6 +372,7 @@ describe('LarkAdapter', () => {
       expect(actionEvent.value).toBe('order_123')
       expect(actionEvent.messageId).toBe('om_card_msg001')
       expect(adapter.channelIdFromThreadId(actionEvent.threadId)).toBe('oc_chat001')
+      expect(adapter.decodeThreadId(actionEvent.threadId).threadId).toBe('omt_thread001')
       expect(actionEvent.triggerId).toBe('oc_chat001:om_card_msg001')
       expect(actionEvent.user.userId).toBe('ou_user1')
     })
@@ -329,10 +393,20 @@ describe('LarkAdapter', () => {
     it('routes select action with option as value', async () => {
       const adapter = makeAdapter()
       const mockChat = await initAdapter(adapter)
+      server.use(
+        http.get(`${BASE}/open-apis/im/v1/messages/:message_id`, () =>
+          HttpResponse.json({
+            code: 0,
+            data: { items: [{ chat_id: 'oc_chat001', message_id: 'om_card_msg002' }] },
+          }),
+        ),
+      )
 
       const event = makeSelectActionEvent('priority', 'high')
       await adapter.handleWebhook(makeRequest(event))
-      expect(mockChat.processAction).toHaveBeenCalledTimes(1)
+      await vi.waitFor(() => {
+        expect(mockChat.processAction).toHaveBeenCalledTimes(1)
+      })
 
       const call = mockChat.processAction.mock.calls[0]!
       const actionEvent = call[0] as { actionId: string; value: string }
@@ -345,6 +419,14 @@ describe('LarkAdapter', () => {
       const mockChat = await initAdapter(adapter)
       mockChat.processModalSubmit.mockResolvedValue(undefined)
       const waitUntil = vi.fn()
+      server.use(
+        http.get(`${BASE}/open-apis/im/v1/messages/:message_id`, () =>
+          HttpResponse.json({
+            code: 0,
+            data: { items: [{ chat_id: 'oc_chat001', message_id: 'om_form_msg001' }] },
+          }),
+        ),
+      )
 
       const event = makeModalSubmitEvent(
         'feedback_form',
@@ -357,7 +439,7 @@ describe('LarkAdapter', () => {
       // processModalSubmit is called async — wait a tick
       await new Promise((r) => setTimeout(r, 0))
       expect(mockChat.processModalSubmit).toHaveBeenCalledTimes(1)
-      expect(waitUntil).toHaveBeenCalledTimes(1)
+      expect(waitUntil).toHaveBeenCalledTimes(2)
 
       const call = mockChat.processModalSubmit.mock.calls[0]!
       const submitEvent = call[0] as {
@@ -680,27 +762,58 @@ describe('LarkAdapter', () => {
         tokenHandler,
         http.post(`${BASE}/open-apis/im/v1/messages`, async ({ request }) => {
           captured = await request.json()
-          return HttpResponse.json({ code: 0, data: { message_id: 'om_sent1' } })
+          return HttpResponse.json({
+            code: 0,
+            data: { message_id: 'om_sent1', thread_id: 'omt_thread001' },
+          })
         }),
       )
       const threadId = adapter.encodeThreadId({ chatId: 'oc_chat001' })
       const result = await adapter.postMessage(threadId, 'hello')
       expect(captured).toMatchObject({ msg_type: 'text', receive_id: 'oc_chat001' })
       expect(result.id).toBe('om_sent1')
+      expect(adapter.decodeThreadId(result.threadId).threadId).toBe('omt_thread001')
     })
 
-    it('postMessage replies when rootMessageId present', async () => {
+    it('postMessage replies within a thread when threadId is present', async () => {
       let replyTo: unknown = undefined
+      let replyBody: unknown = undefined
       server.use(
         tokenHandler,
-        http.post(`${BASE}/open-apis/im/v1/messages/:id/reply`, ({ params }) => {
+        http.get(`${BASE}/open-apis/im/v1/messages`, ({ request }) => {
+          const url = new URL(request.url)
+          if (url.searchParams.get('container_id_type') !== 'thread') {
+            return HttpResponse.json({ code: 0, data: { has_more: false, items: [] } })
+          }
+          return HttpResponse.json({
+            code: 0,
+            data: {
+              has_more: false,
+              items: [
+                {
+                  chat_id: 'oc_chat001',
+                  message_id: 'om_root1',
+                  root_id: '',
+                  thread_id: 'omt_thread001',
+                },
+              ],
+            },
+          })
+        }),
+        http.post(`${BASE}/open-apis/im/v1/messages/:id/reply`, async ({ params, request }) => {
           replyTo = params['id']
-          return HttpResponse.json({ code: 0, data: { message_id: 'om_reply1' } })
+          replyBody = await request.json()
+          return HttpResponse.json({
+            code: 0,
+            data: { message_id: 'om_reply1', root_id: 'om_root1', thread_id: 'omt_thread001' },
+          })
         }),
       )
-      const threadId = adapter.encodeThreadId({ chatId: 'oc_chat001', rootMessageId: 'om_root1' })
-      await adapter.postMessage(threadId, 'reply text')
+      const threadId = adapter.encodeThreadId({ chatId: 'oc_chat001', threadId: 'omt_thread001' })
+      const result = await adapter.postMessage(threadId, 'reply text')
       expect(replyTo).toBe('om_root1')
+      expect(replyBody).toMatchObject({ reply_in_thread: true })
+      expect(adapter.decodeThreadId(result.threadId).threadId).toBe('omt_thread001')
     })
 
     it('editMessage calls updateMessage', async () => {
@@ -882,6 +995,39 @@ describe('LarkAdapter', () => {
       const result = await adapter.fetchMessages(threadId)
       expect(result.messages).toHaveLength(1)
       expect(result.nextCursor).toBe('next-tok')
+    })
+
+    it('fetchMessages uses thread container type for encoded thread IDs', async () => {
+      let capturedUrl: URL | undefined
+      server.use(
+        tokenHandler,
+        http.get(`${BASE}/open-apis/im/v1/messages`, ({ request }) => {
+          capturedUrl = new URL(request.url)
+          return HttpResponse.json({
+            code: 0,
+            data: {
+              has_more: false,
+              items: [
+                {
+                  body: { content: '{"text":"thread reply"}' },
+                  chat_id: 'oc_chat001',
+                  create_time: '1700000000000',
+                  message_id: 'om_thread_reply',
+                  root_id: 'om_root001',
+                  thread_id: 'omt_thread001',
+                },
+              ],
+            },
+          })
+        }),
+      )
+
+      const threadId = adapter.encodeThreadId({ chatId: 'oc_chat001', threadId: 'omt_thread001' })
+      const result = await adapter.fetchMessages(threadId)
+
+      expect(capturedUrl?.searchParams.get('container_id')).toBe('omt_thread001')
+      expect(capturedUrl?.searchParams.get('container_id_type')).toBe('thread')
+      expect(adapter.decodeThreadId(result.messages[0]!.threadId).threadId).toBe('omt_thread001')
     })
 
     it('fetchMessages defaults to backward paging and returns chronological order', async () => {
@@ -1345,10 +1491,12 @@ describe('LarkAdapter', () => {
     it('fetchChannelMessages fetches by channelId with pagination', async () => {
       const adapter = makeAdapter()
       await initAdapter(adapter)
+      let capturedUrl: URL | undefined
       server.use(
         tokenHandler,
-        http.get(`${BASE}/open-apis/im/v1/messages`, () =>
-          HttpResponse.json({
+        http.get(`${BASE}/open-apis/im/v1/messages`, ({ request }) => {
+          capturedUrl = new URL(request.url)
+          return HttpResponse.json({
             code: 0,
             data: {
               has_more: true,
@@ -1361,14 +1509,15 @@ describe('LarkAdapter', () => {
               ],
               page_token: 'next',
             },
-          }),
-        ),
+          })
+        }),
       )
 
       const result = await adapter.fetchChannelMessages('oc_chat001')
       expect(result.messages).toHaveLength(1)
       expect(result.messages.at(0)!.text).toBe('ch msg')
       expect(result.nextCursor).toBe('next')
+      expect(capturedUrl?.searchParams.get('container_id_type')).toBe('chat')
     })
 
     it('fetchChannelMessages defaults to backward paging and returns chronological order', async () => {

@@ -58,6 +58,30 @@ describe('LarkApiClient', () => {
     expect(result).toMatchObject({ data: { message_id: 'om_reply' } })
   })
 
+  it('replyMessage — passes reply_in_thread when requested', async () => {
+    let captured: unknown = undefined
+    server.use(
+      tokenHandler,
+      http.post(`${BASE}/open-apis/im/v1/messages/:id/reply`, async ({ request }) => {
+        captured = await request.json()
+        return HttpResponse.json({
+          code: 0,
+          data: { message_id: 'om_reply', thread_id: 'omt_thread001' },
+        })
+      }),
+    )
+
+    const client = makeClient()
+    const result = await client.replyMessage('om_parent', 'text', '{"text":"reply"}', true)
+
+    expect(captured).toMatchObject({
+      content: '{"text":"reply"}',
+      msg_type: 'text',
+      reply_in_thread: true,
+    })
+    expect(result).toMatchObject({ data: { thread_id: 'omt_thread001' } })
+  })
+
   it('updateMessage — edits message content via PUT', async () => {
     let captured: unknown = undefined
     server.use(
@@ -125,13 +149,30 @@ describe('LarkApiClient', () => {
     )
 
     const client = makeClient()
-    const result = await client.listMessages('oc_chat1', 'tok_abc', pageSize)
+    const result = await client.listMessages('oc_chat1', 'chat', 'tok_abc', pageSize)
 
     expect(capturedParams!.get('container_id')).toBe('oc_chat1')
     expect(capturedParams!.get('container_id_type')).toBe('chat')
     expect(capturedParams!.get('page_token')).toBe('tok_abc')
     expect(capturedParams!.get('page_size')).toBe(String(pageSize))
     expect(result).toMatchObject({ data: { has_more: true } })
+  })
+
+  it('listMessages — supports thread container type', async () => {
+    let capturedParams: URLSearchParams | undefined = undefined
+    server.use(
+      tokenHandler,
+      http.get(`${BASE}/open-apis/im/v1/messages`, ({ request }) => {
+        capturedParams = new URL(request.url).searchParams
+        return HttpResponse.json({ code: 0, data: { has_more: false, items: [] } })
+      }),
+    )
+
+    const client = makeClient()
+    await client.listMessages('omt_thread1', 'thread')
+
+    expect(capturedParams!.get('container_id')).toBe('omt_thread1')
+    expect(capturedParams!.get('container_id_type')).toBe('thread')
   })
 
   it('getBotInfo — returns bot info', async () => {

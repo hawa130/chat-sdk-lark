@@ -261,6 +261,7 @@ export class LarkAdapter implements Adapter<LarkThreadId, LarkRaw> {
   private readonly converter = new LarkFormatConverter()
   private readonly webhookParser: EventDispatcher
   private readonly channelTypeMap = new Map<string, ChannelCacheEntry>()
+  private readonly threadRootMessageMap = new Map<string, string>()
   private readonly userNameCache = new Map<string, string>()
 
   get userName(): string {
@@ -303,14 +304,15 @@ export class LarkAdapter implements Adapter<LarkThreadId, LarkRaw> {
   async disconnect(): Promise<void> {
     this.userNameCache.clear()
     this.channelTypeMap.clear()
+    this.threadRootMessageMap.clear()
   }
 
   // -- Thread ID encoding --
 
   encodeThreadId(data: LarkThreadId): string {
     const base = `lark:${toBase64Url(data.chatId)}`
-    if (data.rootMessageId) {
-      return `${base}:${toBase64Url(data.rootMessageId)}`
+    if (data.threadId) {
+      return `${base}:${toBase64Url(data.threadId)}`
     }
     return base
   }
@@ -325,13 +327,27 @@ export class LarkAdapter implements Adapter<LarkThreadId, LarkRaw> {
     }
     const chatId = fromBase64Url(parts[CHAT_ID_INDEX])
     if (parts[ROOT_MSG_INDEX]) {
-      return { chatId, rootMessageId: fromBase64Url(parts[ROOT_MSG_INDEX]) }
+      return { chatId, threadId: fromBase64Url(parts[ROOT_MSG_INDEX]) }
     }
     return { chatId }
   }
 
   channelIdFromThreadId(threadId: string): string {
     return this.decodeThreadId(threadId).chatId
+  }
+
+  private cacheThreadRootMessage(
+    threadId: string | undefined,
+    rootMessageId: string | undefined,
+  ): void {
+    if (threadId && rootMessageId) {
+      this.threadRootMessageMap.set(threadId, rootMessageId)
+    }
+  }
+
+  private encodeMessageThread(chatId: string, threadId?: string, rootMessageId?: string): string {
+    this.cacheThreadRootMessage(threadId, rootMessageId)
+    return this.encodeThreadId({ chatId, threadId })
   }
 
   // -- Webhook handling --
@@ -377,10 +393,7 @@ export class LarkAdapter implements Adapter<LarkThreadId, LarkRaw> {
       },
       raw,
       text: isMedia ? '' : this.resolveText(msg),
-      threadId: this.encodeThreadId({
-        chatId: msg.chat_id,
-        rootMessageId: msg.root_id || undefined,
-      }),
+      threadId: this.encodeMessageThread(msg.chat_id, msg.thread_id, msg.root_id),
     })
   }
 
@@ -399,7 +412,15 @@ export class LarkAdapter implements Adapter<LarkThreadId, LarkRaw> {
     const textResult = await this.sendMessageContent(decoded, message)
     const result = lastFileResult ?? textResult
     const raw: LarkMessageItem = { message_id: result.data?.message_id }
-    return { id: raw.message_id ?? '', raw, threadId }
+    const returnedThreadId =
+      result.data?.thread_id != null
+        ? this.encodeMessageThread(
+            decoded.chatId,
+            result.data.thread_id,
+            result.data.root_id ?? result.data.message_id,
+          )
+        : threadId
+    return { id: raw.message_id ?? '', raw, threadId: returnedThreadId }
   }
 
   async editMessage(
@@ -451,9 +472,15 @@ export class LarkAdapter implements Adapter<LarkThreadId, LarkRaw> {
   // -- Fetch methods --
 
   async fetchMessages(threadId: string, options?: FetchOptions): Promise<FetchResult<LarkRaw>> {
-    const { chatId } = this.decodeThreadId(threadId)
+    const decoded = this.decodeThreadId(threadId)
     const sortType = directionToSortType(options?.direction)
-    const res = await this.api.listMessages(chatId, options?.cursor, options?.limit, sortType)
+    const res = await this.api.listMessages(
+      decoded.threadId ?? decoded.chatId,
+      decoded.threadId ? 'thread' : 'chat',
+      options?.cursor,
+      options?.limit,
+      sortType,
+    )
     const items =
       sortType === 'ByCreateTimeDesc'
         ? [...(res.data?.items ?? [])].reverse()
@@ -518,7 +545,13 @@ export class LarkAdapter implements Adapter<LarkThreadId, LarkRaw> {
     options?: FetchOptions,
   ): Promise<FetchResult<LarkRaw>> {
     const sortType = directionToSortType(options?.direction)
-    const res = await this.api.listMessages(channelId, options?.cursor, options?.limit, sortType)
+    const res = await this.api.listMessages(
+      channelId,
+      'chat',
+      options?.cursor,
+      options?.limit,
+      sortType,
+    )
     const items =
       sortType === 'ByCreateTimeDesc'
         ? [...(res.data?.items ?? [])].reverse()
@@ -544,7 +577,14 @@ export class LarkAdapter implements Adapter<LarkThreadId, LarkRaw> {
     const textResult = await this.sendMessageContent(decoded, message)
     const result = lastFileResult ?? textResult
     const raw: LarkMessageItem = { message_id: result.data?.message_id }
-    const threadId = this.encodeThreadId(decoded)
+    const threadId =
+      result.data?.thread_id != null
+        ? this.encodeMessageThread(
+            channelId,
+            result.data.thread_id,
+            result.data.root_id ?? result.data.message_id,
+          )
+        : this.encodeThreadId(decoded)
     return { id: raw.message_id ?? '', raw, threadId }
   }
 
@@ -785,10 +825,7 @@ export class LarkAdapter implements Adapter<LarkThreadId, LarkRaw> {
       return
     }
     const msg = data.message
-    const threadId = this.encodeThreadId({
-      chatId: msg.chat_id,
-      rootMessageId: msg.root_id || undefined,
-    })
+    const threadId = this.encodeMessageThread(msg.chat_id, msg.thread_id, msg.root_id)
 
     const factory = async (): Promise<Message<LarkRaw>> => {
       // Seed user cache from mentions (free data)
@@ -867,7 +904,7 @@ export class LarkAdapter implements Adapter<LarkThreadId, LarkRaw> {
       const item = res.data?.items?.[FIRST_ITEM_INDEX]
       const chatId = item?.chat_id
       if (chatId) {
-        return this.encodeThreadId({ chatId, rootMessageId: item?.root_id || undefined })
+        return this.encodeMessageThread(chatId, item?.thread_id, item?.root_id)
       }
     } catch {
       this.logger.warn('Failed to resolve threadId for reaction', { messageId })
@@ -922,6 +959,22 @@ export class LarkAdapter implements Adapter<LarkThreadId, LarkRaw> {
     return error instanceof Error && error.message === 'Webhook verification failed'
   }
 
+  private async resolveCardActionThreadId(chatId: string, messageId: string): Promise<string> {
+    if (!messageId) {
+      return this.encodeThreadId({ chatId })
+    }
+
+    try {
+      const res = await this.api.getMessage(messageId)
+      const item = res.data?.items?.[FIRST_ITEM_INDEX]
+      const resolvedChatId = item?.chat_id ?? chatId
+      return this.encodeMessageThread(resolvedChatId, item?.thread_id, item?.root_id)
+    } catch {
+      this.logger.warn('Failed to resolve threadId for card action', { chatId, messageId })
+      return this.encodeThreadId({ chatId })
+    }
+  }
+
   private handleCardAction(event: ParsedCardActionEvent, options?: WebhookOptions): void {
     const context = event?.context
     if (!event?.action || !context?.open_chat_id) {
@@ -933,20 +986,31 @@ export class LarkAdapter implements Adapter<LarkThreadId, LarkRaw> {
     const userId = event.operator?.open_id ?? ''
     const isModal = action.value?.['__modal'] === MODAL_MARKER
 
-    if (isModal && action.form_value) {
-      this.dispatchModalSubmit(action, userId, messageId, chatId, options)
-    } else if (isModal && action.form_action_type === 'reset') {
+    if (isModal && action.form_action_type === 'reset') {
       this.dispatchModalClose(action, userId, messageId, options)
-    } else {
-      this.dispatchAction(action, userId, messageId, chatId, event.token, options)
+      return
     }
+
+    const task = this.resolveCardActionThreadId(chatId, messageId)
+      .then((threadId) => {
+        if (isModal && action.form_value) {
+          this.dispatchModalSubmit(action, userId, messageId, threadId, options)
+          return undefined
+        }
+        this.dispatchAction(action, userId, messageId, threadId, event.token, options)
+        return undefined
+      })
+      .catch((err: unknown) => {
+        this.logger.error('Card action dispatch error', err)
+      })
+    options?.waitUntil?.(task)
   }
 
   private dispatchModalSubmit(
     action: NonNullable<NonNullable<LarkCardActionBody['event']>['action']>,
     userId: string,
     messageId: string,
-    chatId: string,
+    threadId: string,
     options?: WebhookOptions,
   ): void {
     const callbackId = String(action.value?.['__callbackId'] ?? '')
@@ -977,7 +1041,7 @@ export class LarkAdapter implements Adapter<LarkThreadId, LarkRaw> {
     void task
       .then((response) => {
         if (response) {
-          this.handleModalResponse(response, messageId, chatId, contextId ?? '')
+          this.handleModalResponse(response, messageId, threadId, contextId ?? '')
         }
         return undefined
       })
@@ -1017,14 +1081,14 @@ export class LarkAdapter implements Adapter<LarkThreadId, LarkRaw> {
     action: NonNullable<NonNullable<LarkCardActionBody['event']>['action']>,
     userId: string,
     messageId: string,
-    chatId: string,
+    threadId: string,
     token?: string,
     options?: WebhookOptions,
   ): void {
     const actionValue = action.value ?? {}
     const actionId = String(actionValue['id'] ?? '')
     const value = action.option ?? String(actionValue['action'] ?? '')
-    const threadId = this.encodeThreadId({ chatId })
+    const { chatId } = this.decodeThreadId(threadId)
     const triggerId = `${chatId}:${messageId}`
 
     this.chat.processAction(
@@ -1045,7 +1109,7 @@ export class LarkAdapter implements Adapter<LarkThreadId, LarkRaw> {
   private handleModalResponse(
     response: ModalResponse,
     messageId: string,
-    chatId: string,
+    threadId: string,
     contextId: string,
   ): void {
     if (!response || response.action === 'close') {
@@ -1072,7 +1136,7 @@ export class LarkAdapter implements Adapter<LarkThreadId, LarkRaw> {
           this.logger.error('Failed to update modal card', err)
         })
       } else {
-        void this.sendCardMessage({ chatId }, cardJson).catch((err: unknown) => {
+        void this.sendCardMessage(this.decodeThreadId(threadId), cardJson).catch((err: unknown) => {
           this.logger.error('Failed to push modal card', err)
         })
       }
@@ -1188,9 +1252,47 @@ export class LarkAdapter implements Adapter<LarkThreadId, LarkRaw> {
     return { cardId, messageId: sendRes.data?.message_id ?? '' }
   }
 
+  private async resolveThreadRootMessageId(decoded: LarkThreadId): Promise<string | undefined> {
+    if (!decoded.threadId) {
+      return undefined
+    }
+
+    const cached = this.threadRootMessageMap.get(decoded.threadId)
+    if (cached) {
+      return cached
+    }
+
+    try {
+      const res = await this.api.listMessages(
+        decoded.threadId,
+        'thread',
+        undefined,
+        1,
+        'ByCreateTimeAsc',
+      )
+      const item = res.data?.items?.[FIRST_ITEM_INDEX]
+      const rootMessageId = item?.root_id || item?.message_id
+      this.cacheThreadRootMessage(decoded.threadId, rootMessageId)
+      return rootMessageId ?? undefined
+    } catch {
+      this.logger.warn('Failed to resolve root message for thread', {
+        chatId: decoded.chatId,
+        threadId: decoded.threadId,
+      })
+      return undefined
+    }
+  }
+
   private async sendOrReply(decoded: LarkThreadId, msgType: string, content: string) {
-    if (decoded.rootMessageId) {
-      return this.api.replyMessage(decoded.rootMessageId, msgType, content)
+    const rootMessageId = await this.resolveThreadRootMessageId(decoded)
+    if (rootMessageId) {
+      return this.api.replyMessage(rootMessageId, msgType, content, true)
+    }
+    if (decoded.threadId) {
+      throw new ValidationError(
+        ADAPTER_NAME,
+        `Unable to resolve root message for ${decoded.threadId}`,
+      )
     }
     return this.api.sendMessage(decoded.chatId, msgType, content)
   }
@@ -1207,6 +1309,7 @@ export class LarkAdapter implements Adapter<LarkThreadId, LarkRaw> {
   }
 
   private async itemToMessage(item: LarkMessageItem, threadId: string): Promise<Message<LarkRaw>> {
+    const decodedThread = this.decodeThreadId(threadId)
     const content = item.body?.content ?? ''
     const messageId = item.message_id ?? ''
     const messageType = item.msg_type ?? ''
@@ -1234,7 +1337,11 @@ export class LarkAdapter implements Adapter<LarkThreadId, LarkRaw> {
       },
       raw: item,
       text: isMedia ? '' : extractText(content),
-      threadId,
+      threadId: this.encodeMessageThread(
+        item.chat_id ?? decodedThread.chatId,
+        item.thread_id ?? decodedThread.threadId,
+        item.root_id,
+      ),
     })
   }
 }

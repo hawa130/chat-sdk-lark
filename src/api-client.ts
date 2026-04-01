@@ -106,10 +106,10 @@ class LarkApiClient {
     )
   }
 
-  async replyMessage(messageId: string, msgType: string, content: string) {
+  async replyMessage(messageId: string, msgType: string, content: string, replyInThread?: boolean) {
     return this.call(() =>
       this.client.im.message.reply({
-        data: { content, msg_type: msgType },
+        data: { content, msg_type: msgType, reply_in_thread: replyInThread },
         path: { message_id: messageId },
       }),
     )
@@ -142,7 +142,8 @@ class LarkApiClient {
   }
 
   async listMessages(
-    chatId: string,
+    containerId: string,
+    containerType: 'chat' | 'thread' = 'chat',
     pageToken?: string,
     pageSize?: number,
     sortType?: 'ByCreateTimeAsc' | 'ByCreateTimeDesc',
@@ -150,8 +151,8 @@ class LarkApiClient {
     return this.call(() =>
       this.client.im.message.list({
         params: {
-          container_id: chatId,
-          container_id_type: 'chat',
+          container_id: containerId,
+          container_id_type: containerType,
           page_size: pageSize ?? DEFAULT_PAGE_SIZE,
           page_token: pageToken,
           sort_type: sortType,
