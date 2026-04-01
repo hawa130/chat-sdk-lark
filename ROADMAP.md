@@ -16,6 +16,7 @@ All 17 required Adapter methods implemented. 12 of 15 optional methods implement
 
 Fill remaining gaps in the standard Adapter interface.
 
+- [ ] `listThreads` — after the `thread_id` model is corrected, enumerate recent thread/topic roots from chat history and map them to `ThreadSummary`
 - [ ] `processMemberJoinedChannel` — listen to `im.chat.member.user.added_v1` event
 - [ ] Stream rate limiting — throttle `cardkit` text updates to stay under 10 QPS/card
 
@@ -57,10 +58,9 @@ Lower priority, implement as needed.
 
 Features that don't apply to Lark:
 
-| Feature                | Reason                                |
-| ---------------------- | ------------------------------------- |
-| `listThreads`          | No Lark API to list threads in a chat |
-| `scheduleMessage`      | No Lark API for scheduled delivery    |
-| `processSlashCommand`  | Lark has no slash command mechanism   |
-| `processAppHomeOpened` | Lark has no App Home tab              |
-| `processAssistant*`    | Slack AI Assistant-specific           |
+| Feature                | Reason                              |
+| ---------------------- | ----------------------------------- |
+| `scheduleMessage`      | No Lark API for scheduled delivery  |
+| `processSlashCommand`  | Lark has no slash command mechanism |
+| `processAppHomeOpened` | Lark has no App Home tab            |
+| `processAssistant*`    | Slack AI Assistant-specific         |
