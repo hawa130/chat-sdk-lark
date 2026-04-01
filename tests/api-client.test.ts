@@ -266,6 +266,21 @@ describe('LarkApiClient', () => {
         name: 'ResourceNotFoundError',
       })
     })
+
+    it('unknown Lark API code throws AdapterError', async () => {
+      server.use(
+        tokenHandler,
+        http.post(`${BASE}/open-apis/im/v1/messages`, () =>
+          HttpResponse.json({ code: 123456, msg: 'unexpected failure' }),
+        ),
+      )
+
+      const client = makeClient()
+      await expect(client.sendMessage('oc_chat1', 'text', '{"text":"hi"}')).rejects.toMatchObject({
+        name: 'AdapterError',
+        message: 'Lark API error 123456: unexpected failure',
+      })
+    })
   })
 
   describe('CardKit', () => {

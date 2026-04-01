@@ -1,5 +1,6 @@
 import { AppType, Client, Domain, LoggerLevel } from '@larksuiteoapi/node-sdk'
 import {
+  AdapterError,
   AdapterRateLimitError,
   AuthenticationError,
   PermissionError,
@@ -291,6 +292,8 @@ class LarkApiClient {
     if (typeof code === 'number' && code !== 0) {
       const matched = matchLarkError(undefined, code)
       if (matched) throw matched
+      const msg = (result as { msg?: string } | null)?.msg ?? 'unknown'
+      throw new AdapterError(`Lark API error ${code}: ${msg}`, ADAPTER_NAME, String(code))
     }
     return result
   }

@@ -181,6 +181,9 @@ const chunkToText = (chunk: string | StreamChunk): string => {
   return ''
 }
 
+const hasMeaningfulTextContent = (content: string): boolean =>
+  extractText(content).trim().length > 0
+
 const MIME_TO_LARK_FILE_TYPE: Record<string, LarkFileType> = {
   'application/msword': 'doc',
   'application/pdf': 'pdf',
@@ -410,7 +413,10 @@ export class LarkAdapter implements Adapter<LarkThreadId, LarkRaw> {
     )
     const lastFileResult = fileResults.at(LAST_INDEX) ?? null
     const textResult = await this.sendMessageContent(decoded, message)
-    const result = lastFileResult ?? textResult
+    const result = textResult ?? lastFileResult
+    if (!result) {
+      throw new ValidationError(ADAPTER_NAME, 'Message content is empty')
+    }
     const raw: LarkMessageItem = { message_id: result.data?.message_id }
     const returnedThreadId =
       result.data?.thread_id != null
@@ -463,7 +469,16 @@ export class LarkAdapter implements Adapter<LarkThreadId, LarkRaw> {
   ): Promise<void> {
     const emojiName = extractEmojiName(emoji)
     const res = await this.api.listReactions(messageId)
-    const match = res.data?.items?.find((item) => item.reaction_type?.emoji_type === emojiName)
+    const items = res.data?.items ?? []
+    const match =
+      items.find(
+        (item) =>
+          item.reaction_type?.emoji_type === emojiName &&
+          ((item.operator?.operator_type === 'app' &&
+            item.operator.operator_id === this.config.appId) ||
+            (item.operator?.operator_type === 'user' &&
+              item.operator.operator_id === this.botOpenId)),
+      ) ?? items.find((item) => item.reaction_type?.emoji_type === emojiName)
     if (match?.reaction_id) {
       await this.api.removeReaction(messageId, match.reaction_id)
     }
@@ -575,7 +590,10 @@ export class LarkAdapter implements Adapter<LarkThreadId, LarkRaw> {
     )
     const lastFileResult = fileResults.at(LAST_INDEX) ?? null
     const textResult = await this.sendMessageContent(decoded, message)
-    const result = lastFileResult ?? textResult
+    const result = textResult ?? lastFileResult
+    if (!result) {
+      throw new ValidationError(ADAPTER_NAME, 'Message content is empty')
+    }
     const raw: LarkMessageItem = { message_id: result.data?.message_id }
     const threadId =
       result.data?.thread_id != null
@@ -1180,7 +1198,12 @@ export class LarkAdapter implements Adapter<LarkThreadId, LarkRaw> {
       const cardJson = cardMapper.cardToLarkInteractive(cardCopy)
       return this.sendCardMessage(decoded, cardJson)
     }
-    return this.sendTextMessage(decoded, message)
+
+    const { content, msgType } = renderMessage(message, this.converter)
+    if (!hasMeaningfulTextContent(content)) {
+      return null
+    }
+    return this.sendOrReply(decoded, msgType, content)
   }
 
   private async fetchAndUploadImage(url: string): Promise<string | null> {
@@ -1222,11 +1245,6 @@ export class LarkAdapter implements Adapter<LarkThreadId, LarkRaw> {
     const cardId = res.data?.card_id ?? ''
     const content = JSON.stringify({ data: { card_id: cardId }, type: 'card' })
     return this.sendOrReply(decoded, 'interactive', content)
-  }
-
-  private async sendTextMessage(decoded: LarkThreadId, message: AdapterPostableMessage) {
-    const { content, msgType } = renderMessage(message, this.converter)
-    return this.sendOrReply(decoded, msgType, content)
   }
 
   private async createStreamingCard(
@@ -1321,7 +1339,10 @@ export class LarkAdapter implements Adapter<LarkThreadId, LarkRaw> {
       ? {
           fullName: resolvedName,
           isBot: sender.sender_type === 'app',
-          isMe: sender.id === this.botOpenId,
+          isMe:
+            sender.id_type === 'app_id'
+              ? sender.id === this.config.appId
+              : sender.id === this.botOpenId,
           userId: sender.id,
           userName: resolvedName,
         }

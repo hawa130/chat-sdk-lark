@@ -816,6 +816,76 @@ describe('LarkAdapter', () => {
       expect(adapter.decodeThreadId(result.threadId).threadId).toBe('omt_thread001')
     })
 
+    it('postMessage with files and text returns the text message id', async () => {
+      const sentBodies: Array<Record<string, unknown>> = []
+      server.use(
+        tokenHandler,
+        http.post(`${BASE}/open-apis/im/v1/files`, () =>
+          HttpResponse.json({ code: 0, data: { file_key: 'file_test_001' } }),
+        ),
+        http.post(`${BASE}/open-apis/im/v1/messages`, async ({ request }) => {
+          const body = (await request.json()) as Record<string, unknown>
+          sentBodies.push(body)
+          if (body['msg_type'] === 'file') {
+            return HttpResponse.json({ code: 0, data: { message_id: 'om_file1' } })
+          }
+          return HttpResponse.json({
+            code: 0,
+            data: { message_id: 'om_text1', thread_id: 'omt_thread001' },
+          })
+        }),
+      )
+
+      const threadId = adapter.encodeThreadId({ chatId: 'oc_chat001' })
+      const result = await adapter.postMessage(threadId, {
+        files: [
+          {
+            data: Buffer.from('pdf-bytes'),
+            filename: 'report.pdf',
+            mimeType: 'application/pdf',
+          },
+        ],
+        raw: 'hello with file',
+      })
+
+      expect(sentBodies).toHaveLength(2)
+      expect(sentBodies[0]).toMatchObject({ msg_type: 'file', receive_id: 'oc_chat001' })
+      expect(sentBodies[1]).toMatchObject({ msg_type: 'text', receive_id: 'oc_chat001' })
+      expect(result.id).toBe('om_text1')
+      expect(adapter.decodeThreadId(result.threadId).threadId).toBe('omt_thread001')
+    })
+
+    it('postMessage with files only skips empty text sends', async () => {
+      const sentBodies: Array<Record<string, unknown>> = []
+      server.use(
+        tokenHandler,
+        http.post(`${BASE}/open-apis/im/v1/files`, () =>
+          HttpResponse.json({ code: 0, data: { file_key: 'file_test_001' } }),
+        ),
+        http.post(`${BASE}/open-apis/im/v1/messages`, async ({ request }) => {
+          const body = (await request.json()) as Record<string, unknown>
+          sentBodies.push(body)
+          return HttpResponse.json({ code: 0, data: { message_id: 'om_file_only' } })
+        }),
+      )
+
+      const threadId = adapter.encodeThreadId({ chatId: 'oc_chat001' })
+      const result = await adapter.postMessage(threadId, {
+        files: [
+          {
+            data: Buffer.from('pdf-bytes'),
+            filename: 'report.pdf',
+            mimeType: 'application/pdf',
+          },
+        ],
+        raw: '   ',
+      })
+
+      expect(sentBodies).toHaveLength(1)
+      expect(sentBodies[0]).toMatchObject({ msg_type: 'file', receive_id: 'oc_chat001' })
+      expect(result.id).toBe('om_file_only')
+    })
+
     it('editMessage calls updateMessage', async () => {
       let editedId: unknown = undefined
       server.use(
@@ -948,7 +1018,18 @@ describe('LarkAdapter', () => {
           HttpResponse.json({
             code: 0,
             data: {
-              items: [{ reaction_id: 'rc_001', reaction_type: { emoji_type: 'THUMBSUP' } }],
+              items: [
+                {
+                  operator: { operator_id: 'ou_other_user', operator_type: 'user' },
+                  reaction_id: 'rc_001',
+                  reaction_type: { emoji_type: 'THUMBSUP' },
+                },
+                {
+                  operator: { operator_id: 'test-app-id', operator_type: 'app' },
+                  reaction_id: 'rc_002',
+                  reaction_type: { emoji_type: 'THUMBSUP' },
+                },
+              ],
             },
           }),
         ),
@@ -959,7 +1040,7 @@ describe('LarkAdapter', () => {
       )
       const threadId = adapter.encodeThreadId({ chatId: 'oc_chat001' })
       await adapter.removeReaction(threadId, 'om_msg1', 'THUMBSUP')
-      expect(deletedReactionId).toBe('rc_001')
+      expect(deletedReactionId).toBe('rc_002')
     })
   })
 
@@ -1198,7 +1279,7 @@ describe('LarkAdapter', () => {
                   body: { content: '{"text":"bot msg"}' },
                   create_time: '1700000000000',
                   message_id: 'om_bot',
-                  sender: { id: 'ou_bot001', id_type: 'app_id', sender_type: 'app' },
+                  sender: { id: 'test-app-id', id_type: 'app_id', sender_type: 'app' },
                 },
               ],
             },
