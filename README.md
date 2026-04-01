@@ -83,6 +83,7 @@ Add the following scopes to your app. The table maps each permission to the adap
 | ---------------------------------- | --------------------------------------------- | ------------------------------------ |
 | `im:message:send_as_bot`           | Send, reply, edit, delete messages            | Post, edit, delete messages          |
 | `im:message:readonly`              | Get, list messages; get message resources     | Fetch messages and message history   |
+| `im:message.group_msg`             | Read group chat history                       | Group message history and threads    |
 | `im:message.group_at_msg:readonly` | `im.message.receive_v1` event (group @bot)    | Receive @bot messages in group chats |
 | `im:message.p2p_msg:readonly`      | `im.message.receive_v1` event (DM)            | Receive direct messages              |
 | `im:chat:readonly`                 | `GET /im/v1/chats/:chat_id`                   | `fetchChannelInfo`                   |
