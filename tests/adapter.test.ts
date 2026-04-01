@@ -14,6 +14,7 @@ const {
   makeModalSubmitEvent,
   makeReactionEvent,
   makeRequest,
+  makeSignedRequest,
   makeSelectActionEvent,
 } = fixtures
 
@@ -39,10 +40,12 @@ const userInfoHandler = http.get(`${BASE}/open-apis/contact/v3/users/:userId`, (
   HttpResponse.json({ code: 0, data: { user: { name: 'Alice' } } }),
 )
 
-const makeAdapter = () =>
+const makeAdapter = (overrides: Record<string, unknown> = {}) =>
   new LarkAdapter({
     appId: 'test-app-id',
     appSecret: 'test-app-secret',
+    verificationToken: 'test-verification-token',
+    ...overrides,
   })
 
 const makeMockState = () => ({
@@ -198,6 +201,28 @@ describe('LarkAdapter', () => {
       expect((await adapter.handleWebhook(req)).status).toBe(200)
     })
 
+    it('routes signed events through bridgeWebhook when Encrypt Key is configured', async () => {
+      const adapter = makeAdapter({ encryptKey: 'test-encrypt-key' })
+      const mockChat = await initAdapter(adapter)
+
+      const res = await adapter.handleWebhook(
+        makeSignedRequest(makeMessageEvent(), 'test-encrypt-key'),
+      )
+
+      expect(res.status).toBe(200)
+      expect(mockChat.processMessage).toHaveBeenCalledTimes(1)
+    })
+
+    it('rejects invalid webhook verification', async () => {
+      const adapter = makeAdapter({ encryptKey: 'test-encrypt-key' })
+      const mockChat = await initAdapter(adapter)
+
+      const res = await adapter.handleWebhook(makeRequest(makeMessageEvent()))
+
+      expect(res.status).toBe(403)
+      expect(mockChat.processMessage).not.toHaveBeenCalled()
+    })
+
     it('routes message event to processMessage with factory', async () => {
       const adapter = makeAdapter()
       const mockChat = await initAdapter(adapter)
@@ -268,6 +293,7 @@ describe('LarkAdapter', () => {
       const event = makeCardActionEvent('approve', 'order_123')
       const res = await adapter.handleWebhook(makeRequest(event))
       expect(res.status).toBe(200)
+      expect(await res.json()).toEqual({})
       expect(mockChat.processAction).toHaveBeenCalledTimes(1)
 
       const call = mockChat.processAction.mock.calls[0]!
@@ -285,6 +311,19 @@ describe('LarkAdapter', () => {
       expect(adapter.channelIdFromThreadId(actionEvent.threadId)).toBe('oc_chat001')
       expect(actionEvent.triggerId).toBe('oc_chat001:om_card_msg001')
       expect(actionEvent.user.userId).toBe('ou_user1')
+    })
+
+    it('rejects card.action.trigger when verification token does not match', async () => {
+      const adapter = makeAdapter()
+      const mockChat = await initAdapter(adapter)
+
+      const event = makeCardActionEvent('approve', 'order_123')
+      event.header.token = 'wrong-token'
+
+      const res = await adapter.handleWebhook(makeRequest(event))
+
+      expect(res.status).toBe(403)
+      expect(mockChat.processAction).not.toHaveBeenCalled()
     })
 
     it('routes select action with option as value', async () => {
@@ -305,6 +344,7 @@ describe('LarkAdapter', () => {
       const adapter = makeAdapter()
       const mockChat = await initAdapter(adapter)
       mockChat.processModalSubmit.mockResolvedValue(undefined)
+      const waitUntil = vi.fn()
 
       const event = makeModalSubmitEvent(
         'feedback_form',
@@ -312,11 +352,12 @@ describe('LarkAdapter', () => {
         'ctx_1',
         '{"k":"v"}',
       )
-      await adapter.handleWebhook(makeRequest(event))
+      await adapter.handleWebhook(makeRequest(event), { waitUntil })
 
       // processModalSubmit is called async — wait a tick
       await new Promise((r) => setTimeout(r, 0))
       expect(mockChat.processModalSubmit).toHaveBeenCalledTimes(1)
+      expect(waitUntil).toHaveBeenCalledTimes(1)
 
       const call = mockChat.processModalSubmit.mock.calls[0]!
       const submitEvent = call[0] as {

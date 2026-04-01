@@ -40,11 +40,11 @@ import type {
 import type { PlatformName } from '@chat-adapter/shared'
 import { ValidationError, extractCard, extractFiles, toBuffer } from '@chat-adapter/shared'
 import type { EventHandles } from '@larksuiteoapi/node-sdk'
-import { EventDispatcher } from '@larksuiteoapi/node-sdk'
+import { CardActionHandler, EventDispatcher } from '@larksuiteoapi/node-sdk'
 import { ConsoleLogger, Message } from 'chat'
 import { LarkApiClient } from './api-client.ts'
 import { LarkFormatConverter } from './format-converter.ts'
-import { bridgeWebhook } from './event-bridge.ts'
+import { bridgeWebhook, buildWebhookRequest } from './event-bridge.ts'
 import { cardMapper } from './card-mapper.ts'
 import type { ModalInput } from './modal-mapper.ts'
 import { MODAL_MARKER, modalMapper } from './modal-mapper.ts'
@@ -54,6 +54,10 @@ type EventData<TKey extends keyof EventHandles> =
   NonNullable<EventHandles[TKey]> extends (data: infer TData, ...args: unknown[]) => unknown
     ? TData
     : never
+type ParsedCardActionEvent = NonNullable<LarkCardActionBody['event']>
+type RequestParser = {
+  parse: (data: Record<string, unknown>) => Record<string, unknown>
+}
 
 /** Recursive node shape for traversing card trees to upload images. */
 type CardImageNode = { children?: CardImageNode[]; imageUrl?: string; type?: string; url?: string }
@@ -67,6 +71,7 @@ const CHAT_ID_INDEX = 1
 const ROOT_MSG_INDEX = 2
 const FIRST_ITEM_INDEX = 0
 const HTTP_BAD_REQUEST = 400
+const HTTP_FORBIDDEN = 403
 const HTTP_OK = 200
 const LAST_INDEX = -1
 
@@ -243,10 +248,9 @@ export class LarkAdapter implements Adapter<LarkThreadId, LarkRaw> {
   private readonly config: LarkAdapterConfig
   private api!: LarkApiClient
   private readonly converter = new LarkFormatConverter()
-  private readonly dispatcher: EventDispatcher
+  private readonly webhookParser: EventDispatcher
   private readonly channelTypeMap = new Map<string, string>()
   private readonly userNameCache = new Map<string, string>()
-  private pendingWebhookOptions?: WebhookOptions
 
   get userName(): string {
     return this.resolvedUserName
@@ -256,11 +260,10 @@ export class LarkAdapter implements Adapter<LarkThreadId, LarkRaw> {
     this.config = config
     this.logger = config.logger ?? new ConsoleLogger('info').child('lark')
     this.resolvedUserName = config.userName ?? 'LarkBot'
-    this.dispatcher = new EventDispatcher({
+    this.webhookParser = new EventDispatcher({
       encryptKey: config.encryptKey,
       verificationToken: config.verificationToken,
     })
-    this.registerEventHandlers()
   }
 
   async initialize(chat: ChatInstance): Promise<void> {
@@ -327,10 +330,22 @@ export class LarkAdapter implements Adapter<LarkThreadId, LarkRaw> {
     if (!body) {
       return new Response('Invalid JSON', { status: HTTP_BAD_REQUEST })
     }
-    if (body['type'] === 'url_verification') {
-      return this.handleChallenge(request)
+
+    const eventType = await this.resolveWebhookEventType(request, body)
+    const dispatcher =
+      eventType === 'card.action.trigger'
+        ? this.createCardActionHandler(options)
+        : this.createEventDispatcher(options)
+
+    try {
+      const result = await bridgeWebhook(request, dispatcher)
+      return Response.json(result ?? {}, { status: HTTP_OK })
+    } catch (error) {
+      if (this.isVerificationError(error)) {
+        return new Response('Forbidden', { status: HTTP_FORBIDDEN })
+      }
+      throw error
     }
-    return this.handleEvent(body, options)
   }
 
   // -- Message parsing --
@@ -718,29 +733,36 @@ export class LarkAdapter implements Adapter<LarkThreadId, LarkRaw> {
     }
   }
 
-  private registerEventHandlers(): void {
-    this.dispatcher.register({
+  private createEventDispatcher(options?: WebhookOptions): EventDispatcher {
+    const dispatcher = new EventDispatcher({
+      encryptKey: this.config.encryptKey,
+      verificationToken: this.config.verificationToken,
+    })
+    dispatcher.register({
       'im.chat.member.bot.added_v1': (data) => {
         this.logger.info('Bot added to chat', data)
       },
       'im.message.reaction.created_v1': (data) => {
-        this.handleReactionEvent(data, true)
+        this.handleReactionEvent(data, true, options)
       },
       'im.message.reaction.deleted_v1': (data) => {
-        this.handleReactionEvent(data, false)
+        this.handleReactionEvent(data, false, options)
       },
       'im.message.receive_v1': (data) => {
-        this.handleMessageEvent(data)
+        this.handleMessageEvent(data, options)
       },
     })
+    return dispatcher
   }
 
-  private handleMessageEvent(data: EventData<'im.message.receive_v1'>): void {
+  private handleMessageEvent(
+    data: EventData<'im.message.receive_v1'>,
+    options?: WebhookOptions,
+  ): void {
     if (!data?.message) {
       return
     }
     const msg = data.message
-    const options = this.pendingWebhookOptions
     const threadId = this.encodeThreadId({
       chatId: msg.chat_id,
       rootMessageId: msg.root_id || undefined,
@@ -782,11 +804,11 @@ export class LarkAdapter implements Adapter<LarkThreadId, LarkRaw> {
   private handleReactionEvent(
     data: EventData<'im.message.reaction.created_v1'>,
     added: boolean,
+    options?: WebhookOptions,
   ): void {
     if (!data?.message_id) {
       return
     }
-    const options = this.pendingWebhookOptions
     const emojiType = data.reaction_type?.emoji_type ?? ''
     const messageId = data.message_id
     const userId = data.user_id?.open_id ?? ''
@@ -839,22 +861,46 @@ export class LarkAdapter implements Adapter<LarkThreadId, LarkRaw> {
     }
   }
 
-  private async handleChallenge(request: Request): Promise<Response> {
-    const result = await bridgeWebhook(request, this.dispatcher)
-    return Response.json(result)
-  }
-
-  private handleEvent(body: LarkWebhookBody, options?: WebhookOptions): Response {
-    if (body.header?.event_type === 'card.action.trigger') {
-      this.handleCardAction(body as LarkCardActionBody, options)
-    } else {
-      this.dispatchEvent(body, options)
+  private async resolveWebhookEventType(
+    request: Request,
+    body: LarkWebhookBody,
+  ): Promise<string | undefined> {
+    if (body['type'] === 'url_verification') {
+      return undefined
     }
-    return new Response('ok', { status: HTTP_OK })
+    if (body.header?.event_type) {
+      return body.header.event_type
+    }
+
+    const requestData = await buildWebhookRequest(request.clone())
+    const requestHandle = (
+      this.webhookParser as EventDispatcher & {
+        requestHandle?: RequestParser
+      }
+    ).requestHandle
+    const parsed = requestHandle?.parse(requestData)
+    const eventType = parsed?.['event_type']
+    return typeof eventType === 'string' ? eventType : undefined
   }
 
-  private handleCardAction(body: LarkCardActionBody, options?: WebhookOptions): void {
-    const event = body.event
+  private createCardActionHandler(options?: WebhookOptions): CardActionHandler {
+    return new CardActionHandler(
+      {
+        encryptKey: this.config.encryptKey,
+        verificationToken: this.config.verificationToken,
+      },
+      async (event: ParsedCardActionEvent) => {
+        this.handleCardAction(event, options)
+        return {}
+      },
+    )
+  }
+
+  private isVerificationError(error: unknown): boolean {
+    return error instanceof Error && error.message === 'Webhook verification failed'
+  }
+
+  private handleCardAction(event: ParsedCardActionEvent, options?: WebhookOptions): void {
     const context = event?.context
     if (!event?.action || !context?.open_chat_id) {
       return
@@ -892,20 +938,21 @@ export class LarkAdapter implements Adapter<LarkThreadId, LarkRaw> {
       }
     }
 
-    void this.chat
-      .processModalSubmit(
-        {
-          adapter: this,
-          callbackId,
-          privateMetadata,
-          raw: action,
-          user: minimalUser(userId),
-          values,
-          viewId: messageId,
-        },
-        contextId,
-        options,
-      )
+    const task = this.chat.processModalSubmit(
+      {
+        adapter: this,
+        callbackId,
+        privateMetadata,
+        raw: action,
+        user: minimalUser(userId),
+        values,
+        viewId: messageId,
+      },
+      contextId,
+      options,
+    )
+    options?.waitUntil?.(task)
+    void task
       .then((response) => {
         if (response) {
           this.handleModalResponse(response, messageId, chatId, contextId ?? '')
@@ -1008,17 +1055,6 @@ export class LarkAdapter implements Adapter<LarkThreadId, LarkRaw> {
         })
       }
     }
-  }
-
-  private dispatchEvent(body: LarkWebhookBody, options?: WebhookOptions): void {
-    this.pendingWebhookOptions = options
-    void (this.dispatcher.invoke(body as Record<string, unknown>) as Promise<unknown>)
-      .catch((err: unknown) => {
-        this.logger.error('Event processing error', err)
-      })
-      .finally(() => {
-        this.pendingWebhookOptions = undefined
-      })
   }
 
   private extractImageKey(uploadRes: { image_key?: string } | null): string {

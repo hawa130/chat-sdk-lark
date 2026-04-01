@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto'
+
 /** A minimal im.message.receive_v1 event payload (v2 schema). */
 const makeMessageEvent = (overrides?: Record<string, unknown>) => ({
   event: {
@@ -89,6 +91,29 @@ const makeRequest = (body: unknown): Request =>
     headers: { 'content-type': 'application/json' },
     method: 'POST',
   })
+
+/** Helper: create a signed Request for Encrypt Key validation. */
+const makeSignedRequest = (
+  body: unknown,
+  encryptKey: string,
+  { nonce = 'test-nonce', timestamp = '1700000000' }: { nonce?: string; timestamp?: string } = {},
+): Request => {
+  const rawBody = JSON.stringify(body)
+  const signature = createHash('sha256')
+    .update(`${timestamp}${nonce}${encryptKey}${rawBody}`)
+    .digest('hex')
+
+  return new Request('http://localhost/webhook', {
+    body: rawBody,
+    headers: {
+      'content-type': 'application/json',
+      'x-lark-request-nonce': nonce,
+      'x-lark-signature': signature,
+      'x-lark-request-timestamp': timestamp,
+    },
+    method: 'POST',
+  })
+}
 
 /** Card action callback (card.action.trigger). */
 const makeCardActionEvent = (actionId = 'approve', value = 'order_123') => ({
@@ -219,6 +244,7 @@ const fixtures = {
   makeModalSubmitEvent,
   makeReactionEvent,
   makeRequest,
+  makeSignedRequest,
   makeSelectActionEvent,
 }
 

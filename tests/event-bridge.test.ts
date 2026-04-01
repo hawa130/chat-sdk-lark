@@ -5,11 +5,11 @@ import { fixtures } from './fixtures.ts'
 
 const { makeChallengeEvent, makeMessageEvent, makeRequest } = fixtures
 
-const createDispatcher = () => new EventDispatcher({})
+const createDispatcher = (verificationToken?: string) => new EventDispatcher({ verificationToken })
 
 describe('bridgeWebhook', () => {
   it('forwards a message event to the registered handler', async () => {
-    const dispatcher = createDispatcher()
+    const dispatcher = createDispatcher('test-verification-token')
     const handler = vi.fn()
     dispatcher.register({ 'im.message.receive_v1': handler })
 
@@ -36,5 +36,12 @@ describe('bridgeWebhook', () => {
       method: 'POST',
     })
     await expect(bridgeWebhook(req, dispatcher)).rejects.toThrow(/invalid/i)
+  })
+
+  it('rejects mismatched verification tokens', async () => {
+    const dispatcher = createDispatcher('expected-token')
+    const req = makeRequest(makeMessageEvent())
+
+    await expect(bridgeWebhook(req, dispatcher)).rejects.toThrow(/verification/i)
   })
 })
