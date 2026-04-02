@@ -81,4 +81,48 @@ describe('createLarkSdkLogger', () => {
       },
     ])
   })
+
+  it('summarizes axios-style lark api errors into a readable line', () => {
+    const records: LogRecord[] = []
+    const logger = createLarkSdkLogger(createRecordingLogger(records))
+
+    logger.error([
+      {
+        config: {
+          method: 'post',
+          url: 'https://open.feishu.cn/open-apis/im/v1/messages/om_123/reactions',
+        },
+        message: 'Request failed with status code 400',
+        response: {
+          status: 400,
+          statusText: 'Bad Request',
+        },
+      },
+      {
+        code: 231001,
+        log_id: '20260402164115E5185F5428F683700A71',
+        msg: 'reaction type is invalid.',
+        troubleshooter:
+          'https://open.feishu.cn/search?from=openapi&log_id=20260402164115E5185F5428F683700A71',
+      },
+    ])
+
+    expect(records).toEqual([
+      {
+        args: [
+          {
+            code: 231001,
+            logId: '20260402164115E5185F5428F683700A71',
+            status: 400,
+            troubleshooter:
+              'https://open.feishu.cn/search?from=openapi&log_id=20260402164115E5185F5428F683700A71',
+          },
+        ],
+        level: 'error',
+        message:
+          'HTTP 400 POST /open-apis/im/v1/messages/om_123/reactions -> Lark API 231001: reaction type is invalid.',
+        prefix: 'chat-sdk:lark:sdk',
+      },
+    ])
+  })
 })

@@ -44,6 +44,13 @@ const readObjectField = (value: object | undefined, key: string): object | undef
   return typeof field === 'object' && field !== null ? field : undefined
 }
 
+const extractErrorResponseData = (error: unknown): object | undefined => {
+  if (!isObject(error)) {
+    return undefined
+  }
+  return readObjectField(readObjectField(error, 'response'), 'data')
+}
+
 const extractStatus = (error: unknown): number | undefined => {
   if (!isObject(error)) {
     return undefined
@@ -59,11 +66,23 @@ const extractCode = (error: unknown): number | undefined => {
   if (!isObject(error)) {
     return undefined
   }
+  return readNumberField(error, 'code') ?? readNumberField(extractErrorResponseData(error), 'code')
+}
+
+const extractErrorMessage = (error: unknown): string | undefined => {
+  if (!isObject(error)) {
+    return undefined
+  }
   return (
-    readNumberField(error, 'code') ??
-    readNumberField(readObjectField(readObjectField(error, 'response'), 'data'), 'code')
+    readStringField(error, 'message') ?? readStringField(extractErrorResponseData(error), 'msg')
   )
 }
+
+const extractLarkLogId = (error: unknown): string | undefined =>
+  readStringField(extractErrorResponseData(error), 'log_id')
+
+const extractTroubleshooter = (error: unknown): string | undefined =>
+  readStringField(extractErrorResponseData(error), 'troubleshooter')
 
 const extractResponseCode = (result: unknown): number | undefined => {
   if (!isObject(result)) {
@@ -98,10 +117,46 @@ const matchLarkError = (
   return undefined
 }
 
+const createLarkAdapterError = (
+  code: number,
+  msg: string,
+  error: unknown,
+): AdapterError & {
+  logId?: string
+  troubleshooter?: string
+} => {
+  const mapped = new AdapterError(
+    `Lark API error ${code}: ${msg}`,
+    ADAPTER_NAME,
+    String(code),
+  ) as AdapterError & {
+    logId?: string
+    troubleshooter?: string
+  }
+  const logId = extractLarkLogId(error)
+  const troubleshooter = extractTroubleshooter(error)
+  if (logId) {
+    mapped.logId = logId
+  }
+  if (troubleshooter) {
+    mapped.troubleshooter = troubleshooter
+  }
+  return mapped
+}
+
 const mapError = (error: unknown): Error => {
-  const matched = matchLarkError(extractStatus(error), extractCode(error))
+  const status = extractStatus(error)
+  const code = extractCode(error)
+  const matched = matchLarkError(status, code)
   if (matched) {
     return matched
+  }
+  if (typeof code === 'number') {
+    const msg =
+      extractResponseMessage(extractErrorResponseData(error)) ??
+      extractErrorMessage(error) ??
+      'unknown'
+    return createLarkAdapterError(code, msg, error)
   }
   if (error instanceof Error) {
     return error

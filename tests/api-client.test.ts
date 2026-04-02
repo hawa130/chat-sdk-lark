@@ -282,6 +282,31 @@ describe('LarkApiClient', () => {
       })
     })
 
+    it('400 response with lark api body throws readable AdapterError', async () => {
+      server.use(
+        tokenHandler,
+        http.post(`${BASE}/open-apis/im/v1/messages/:message_id/reactions`, () =>
+          HttpResponse.json(
+            {
+              code: 231001,
+              log_id: '20260402164115E5185F5428F683700A71',
+              msg: 'reaction type is invalid.',
+              troubleshooter:
+                'https://open.feishu.cn/search?from=openapi&log_id=20260402164115E5185F5428F683700A71',
+            },
+            { status: 400 },
+          ),
+        ),
+      )
+
+      const client = makeClient()
+      await expect(client.addReaction('om_msg1', 'thumbs_up')).rejects.toMatchObject({
+        code: '231001',
+        message: 'Lark API error 231001: reaction type is invalid.',
+        name: 'AdapterError',
+      })
+    })
+
     it('unknown Lark API code throws AdapterError', async () => {
       server.use(
         tokenHandler,
