@@ -33,6 +33,10 @@ After writing or modifying code, always run:
 3. `bun run typecheck` — ensure TypeScript types are sound
 4. `bun run test` — ensure all tests pass
 
+## Commits
+
+- Use Conventional Commits for all commit messages (for example: `feat: ...`, `fix: ...`, `docs: ...`, `chore: ...`).
+
 ## Type Safety
 
 - Prefer `as T` over `as any`. If a double assertion (`as unknown as T`) is needed, the type model is wrong — fix the types instead.
