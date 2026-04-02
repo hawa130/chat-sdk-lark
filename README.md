@@ -275,6 +275,8 @@ LARK_DOMAIN=feishu               # Optional, "feishu" (default) or "lark"
 | DMs                | Yes                                       |
 | Ephemeral messages | Yes (fire-and-forget, cannot edit/delete) |
 
+> Reaction emoji are normalized between Chat SDK and Feishu: outbound calls such as `addReaction("thumbs_up")` are converted to Feishu `emoji_type` values like `THUMBSUP`, while inbound reaction events keep the original Feishu value in `rawEmoji` and expose the normalized Chat SDK name on `event.emoji.name`.
+
 ### Message history
 
 | Feature                | Supported |

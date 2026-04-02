@@ -492,11 +492,13 @@ describe('LarkAdapter', () => {
       })
       const call = mockChat.processReaction.mock.calls[0]!
       const reactionEvent = call[0] as {
+        emoji: { name: string }
         threadId: string
         messageId: string
         rawEmoji: string
         user: { fullName: string; userName: string }
       }
+      expect(reactionEvent.emoji.name).toBe('thumbs_up')
       expect(reactionEvent.threadId).toContain('lark:')
       expect(reactionEvent.messageId).toBe('om_msg001')
       expect(reactionEvent.rawEmoji).toBe('THUMBSUP')
@@ -505,6 +507,44 @@ describe('LarkAdapter', () => {
       // Verify threadId decodes back to the chat from getMessage
       expect(adapter.channelIdFromThreadId(reactionEvent.threadId)).toBe('oc_chat001')
       expect(adapter.decodeThreadId(reactionEvent.threadId).threadId).toBe('omt_thread001')
+    })
+
+    it('keeps unknown Feishu reaction types as-is when normalizing webhook events', async () => {
+      const adapter = makeAdapter()
+      const mockChat = await initAdapter(adapter)
+
+      server.use(
+        http.get(`${BASE}/open-apis/im/v1/messages/:message_id`, () =>
+          HttpResponse.json({
+            code: 0,
+            data: {
+              items: [{ chat_id: 'oc_chat001', message_id: 'om_msg001', root_id: '' }],
+            },
+          }),
+        ),
+      )
+
+      const baseEvent = makeReactionEvent('created')
+      const event = {
+        ...baseEvent,
+        event: {
+          ...baseEvent.event,
+          reaction_type: { emoji_type: 'Typing' },
+        },
+      }
+
+      await adapter.handleWebhook(makeRequest(event))
+
+      await vi.waitFor(() => {
+        expect(mockChat.processReaction).toHaveBeenCalledTimes(1)
+      })
+
+      const reactionEvent = mockChat.processReaction.mock.calls[0]![0] as {
+        emoji: { name: string }
+        rawEmoji: string
+      }
+      expect(reactionEvent.emoji.name).toBe('Typing')
+      expect(reactionEvent.rawEmoji).toBe('Typing')
     })
 
     it('routes card.action.trigger to processAction', async () => {
@@ -1325,6 +1365,22 @@ describe('LarkAdapter', () => {
       expect(captured).toMatchObject({ reaction_type: { emoji_type: 'THUMBSUP' } })
     })
 
+    it('addReaction maps Chat SDK emoji names to Feishu emoji_type values', async () => {
+      let captured: unknown = undefined
+      server.use(
+        tokenHandler,
+        http.post(`${BASE}/open-apis/im/v1/messages/:id/reactions`, async ({ request }) => {
+          captured = await request.json()
+          return HttpResponse.json({ code: 0 })
+        }),
+      )
+
+      const threadId = adapter.encodeThreadId({ chatId: 'oc_chat001' })
+      await adapter.addReaction(threadId, 'om_msg1', 'thumbs_up')
+
+      expect(captured).toMatchObject({ reaction_type: { emoji_type: 'THUMBSUP' } })
+    })
+
     it('addReaction handles EmojiValue object', async () => {
       let captured: unknown = undefined
       server.use(
@@ -1336,6 +1392,22 @@ describe('LarkAdapter', () => {
       )
       const threadId = adapter.encodeThreadId({ chatId: 'oc_chat001' })
       const emojiValue = { name: 'SMILE', toJSON: () => 'SMILE', toString: () => 'SMILE' }
+      await adapter.addReaction(threadId, 'om_msg1', emojiValue)
+      expect(captured).toMatchObject({ reaction_type: { emoji_type: 'SMILE' } })
+    })
+
+    it('addReaction maps EmojiValue names to Feishu emoji_type values', async () => {
+      let captured: unknown = undefined
+      server.use(
+        tokenHandler,
+        http.post(`${BASE}/open-apis/im/v1/messages/:id/reactions`, async ({ request }) => {
+          captured = await request.json()
+          return HttpResponse.json({ code: 0 })
+        }),
+      )
+
+      const threadId = adapter.encodeThreadId({ chatId: 'oc_chat001' })
+      const emojiValue = { name: 'smile', toJSON: () => 'smile', toString: () => 'smile' }
       await adapter.addReaction(threadId, 'om_msg1', emojiValue)
       expect(captured).toMatchObject({ reaction_type: { emoji_type: 'SMILE' } })
     })
@@ -1370,6 +1442,41 @@ describe('LarkAdapter', () => {
       )
       const threadId = adapter.encodeThreadId({ chatId: 'oc_chat001' })
       await adapter.removeReaction(threadId, 'om_msg1', 'THUMBSUP')
+      expect(deletedReactionId).toBe('rc_002')
+    })
+
+    it('removeReaction matches the mapped Feishu emoji_type before deleting', async () => {
+      let deletedReactionId: unknown = undefined
+      server.use(
+        tokenHandler,
+        http.get(`${BASE}/open-apis/im/v1/messages/:id/reactions`, () =>
+          HttpResponse.json({
+            code: 0,
+            data: {
+              items: [
+                {
+                  operator: { operator_id: 'ou_other_user', operator_type: 'user' },
+                  reaction_id: 'rc_001',
+                  reaction_type: { emoji_type: 'THUMBSUP' },
+                },
+                {
+                  operator: { operator_id: 'test-app-id', operator_type: 'app' },
+                  reaction_id: 'rc_002',
+                  reaction_type: { emoji_type: 'THUMBSUP' },
+                },
+              ],
+            },
+          }),
+        ),
+        http.delete(`${BASE}/open-apis/im/v1/messages/:mid/reactions/:rid`, ({ params }) => {
+          deletedReactionId = params['rid']
+          return HttpResponse.json({ code: 0 })
+        }),
+      )
+
+      const threadId = adapter.encodeThreadId({ chatId: 'oc_chat001' })
+      await adapter.removeReaction(threadId, 'om_msg1', 'thumbs_up')
+
       expect(deletedReactionId).toBe('rc_002')
     })
   })

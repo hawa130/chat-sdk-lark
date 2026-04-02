@@ -152,12 +152,14 @@ describe('integration: Chat → Lark adapter pipeline', () => {
       ),
     )
 
-    let capturedEmoji = ''
+    let capturedEmojiName = ''
+    let capturedRawEmoji = ''
     let capturedAdded: boolean | undefined
 
     const ctx = createLarkTestContext({
       onReaction: async (event) => {
-        capturedEmoji = event.rawEmoji
+        capturedEmojiName = event.emoji.name
+        capturedRawEmoji = event.rawEmoji
         capturedAdded = event.added
       },
     })
@@ -167,8 +169,9 @@ describe('integration: Chat → Lark adapter pipeline', () => {
 
     // Wait for async threadId resolution before assertion
     await vi.waitFor(() => {
-      expect(capturedEmoji).toBe('THUMBSUP')
+      expect(capturedEmojiName).toBe('thumbs_up')
     })
+    expect(capturedRawEmoji).toBe('THUMBSUP')
     expect(capturedAdded).toBe(true)
   })
 
