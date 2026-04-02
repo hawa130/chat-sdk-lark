@@ -135,6 +135,20 @@ afterAll(() => server.close())
 
 describe('LarkAdapter', () => {
   describe('websocket incoming', () => {
+    it('routes webhook parser SDK logs through the adapter logger', () => {
+      const mockLogger = {
+        child: () => mockLogger,
+        debug: vi.fn(),
+        error: vi.fn(),
+        info: vi.fn(),
+        warn: vi.fn(),
+      }
+
+      makeAdapter({ logger: mockLogger })
+
+      expect(mockLogger.info).toHaveBeenCalledWith('event-dispatch is ready')
+    })
+
     it('starts WS client during initialize when events use ws transport', async () => {
       const startSpy = vi.spyOn(WSClient.prototype, 'start').mockResolvedValue(undefined)
       const adapter = makeAdapter({
@@ -148,6 +162,37 @@ describe('LarkAdapter', () => {
       expect(startSpy).toHaveBeenCalledWith({
         eventDispatcher: expect.anything(),
       })
+    })
+
+    it('passes SDK ws logs through the adapter logger', async () => {
+      const mockLogger = {
+        child: () => mockLogger,
+        debug: vi.fn(),
+        error: vi.fn(),
+        info: vi.fn(),
+        warn: vi.fn(),
+      }
+      let wsClient: WSClient | undefined
+
+      vi.spyOn(WSClient.prototype, 'start').mockImplementation(async function (this: WSClient) {
+        wsClient = this
+      })
+      const adapter = makeAdapter({
+        incoming: { callbacks: 'webhook', events: 'ws' },
+        logger: mockLogger,
+      })
+
+      await initAdapter(adapter)
+
+      const sdkLogger = (
+        wsClient as unknown as {
+          logger?: { logger?: { info: (message: unknown) => void } }
+        }
+      )?.logger?.logger
+
+      sdkLogger?.info(['[ws]', 'ws client ready'])
+
+      expect(mockLogger.info).toHaveBeenCalledWith('ws client ready')
     })
 
     it('closes WS client during disconnect when ws transport is enabled', async () => {

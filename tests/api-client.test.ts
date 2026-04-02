@@ -1,5 +1,5 @@
 import { HttpResponse, http } from 'msw'
-import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest'
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import { LarkApiClient } from '../src/api-client.ts'
 import { server } from './setup.ts'
 
@@ -17,6 +17,21 @@ afterEach(() => server.resetHandlers())
 afterAll(() => server.close())
 
 describe('LarkApiClient', () => {
+  it('normalizes SDK logs through the provided logger', () => {
+    const mockLogger = {
+      child: () => mockLogger,
+      debug: vi.fn(),
+      error: vi.fn(),
+      info: vi.fn(),
+      warn: vi.fn(),
+    }
+
+    const client = new LarkApiClient({ appId: 'app-id', appSecret: 'app-secret' }, mockLogger)
+
+    expect(client).toBeInstanceOf(LarkApiClient)
+    expect(mockLogger.info).toHaveBeenCalledWith('client ready')
+  })
+
   it('sendMessage — sends text with correct params', async () => {
     let captured: unknown = undefined
     server.use(

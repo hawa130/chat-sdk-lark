@@ -40,12 +40,13 @@ import type {
 import type { PlatformName } from '@chat-adapter/shared'
 import { ValidationError, extractCard, extractFiles, toBuffer } from '@chat-adapter/shared'
 import type { EventHandles } from '@larksuiteoapi/node-sdk'
-import { CardActionHandler, EventDispatcher, WSClient } from '@larksuiteoapi/node-sdk'
+import { CardActionHandler, EventDispatcher, LoggerLevel, WSClient } from '@larksuiteoapi/node-sdk'
 import { ConsoleLogger, Message } from 'chat'
 import { LarkApiClient } from './api-client.ts'
 import { LarkFormatConverter } from './format-converter.ts'
 import { bridgeWebhook, buildWebhookRequest } from './event-bridge.ts'
 import { cardMapper } from './card-mapper.ts'
+import { createLarkSdkLogger } from './lark-sdk-logger.ts'
 import type { ModalInput } from './modal-mapper.ts'
 import { MODAL_MARKER, modalMapper } from './modal-mapper.ts'
 
@@ -274,6 +275,7 @@ export class LarkAdapter implements Adapter<LarkThreadId, LarkRaw> {
 
   private chat!: ChatInstance
   private readonly logger: Logger
+  private readonly sdkLogger: ReturnType<typeof createLarkSdkLogger>
   private botOpenId = ''
   private resolvedUserName: string
   private readonly config: LarkAdapterConfig
@@ -293,9 +295,12 @@ export class LarkAdapter implements Adapter<LarkThreadId, LarkRaw> {
   constructor(config: LarkAdapterConfig) {
     this.config = config
     this.logger = config.logger ?? new ConsoleLogger('info').child('lark')
+    this.sdkLogger = createLarkSdkLogger(this.logger)
     this.resolvedUserName = config.userName ?? 'LarkBot'
     this.webhookParser = new EventDispatcher({
       encryptKey: config.encryptKey,
+      logger: this.sdkLogger,
+      loggerLevel: LoggerLevel.debug,
       verificationToken: config.verificationToken,
     })
   }
@@ -870,6 +875,8 @@ export class LarkAdapter implements Adapter<LarkThreadId, LarkRaw> {
   private createEventDispatcher(options?: WebhookOptions): EventDispatcher {
     const dispatcher = new EventDispatcher({
       encryptKey: this.config.encryptKey,
+      logger: this.sdkLogger,
+      loggerLevel: LoggerLevel.debug,
       verificationToken: this.config.verificationToken,
     })
     dispatcher.register({
@@ -890,7 +897,10 @@ export class LarkAdapter implements Adapter<LarkThreadId, LarkRaw> {
   }
 
   private createWsDispatcher(): EventDispatcher {
-    const dispatcher = new EventDispatcher({})
+    const dispatcher = new EventDispatcher({
+      logger: this.sdkLogger,
+      loggerLevel: LoggerLevel.debug,
+    })
     const handlers: Record<string, (data: unknown) => void> = {}
 
     if (this.shouldUseWsForEvents()) {
@@ -1047,6 +1057,8 @@ export class LarkAdapter implements Adapter<LarkThreadId, LarkRaw> {
     return new CardActionHandler(
       {
         encryptKey: this.config.encryptKey,
+        logger: this.sdkLogger,
+        loggerLevel: LoggerLevel.debug,
         verificationToken: this.config.verificationToken,
       },
       async (event: ParsedCardActionEvent) => {
@@ -1059,6 +1071,8 @@ export class LarkAdapter implements Adapter<LarkThreadId, LarkRaw> {
   private createIgnoredEventDispatcher(eventType: string): EventDispatcher {
     const dispatcher = new EventDispatcher({
       encryptKey: this.config.encryptKey,
+      logger: this.sdkLogger,
+      loggerLevel: LoggerLevel.debug,
       verificationToken: this.config.verificationToken,
     })
     dispatcher.register({
@@ -1071,6 +1085,8 @@ export class LarkAdapter implements Adapter<LarkThreadId, LarkRaw> {
     return new CardActionHandler(
       {
         encryptKey: this.config.encryptKey,
+        logger: this.sdkLogger,
+        loggerLevel: LoggerLevel.debug,
         verificationToken: this.config.verificationToken,
       },
       async () => ({}),
@@ -1151,6 +1167,7 @@ export class LarkAdapter implements Adapter<LarkThreadId, LarkRaw> {
       appSecret: this.config.appSecret,
       ...(this.config.domain !== undefined && { domain: this.config.domain }),
       ...(this.config.httpInstance !== undefined && { httpInstance: this.config.httpInstance }),
+      logger: this.sdkLogger,
       ...(this.config.ws?.agent !== undefined && { agent: this.config.ws.agent }),
       ...(this.config.ws?.autoReconnect !== undefined && {
         autoReconnect: this.config.ws.autoReconnect,

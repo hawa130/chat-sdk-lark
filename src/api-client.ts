@@ -6,14 +6,9 @@ import {
   PermissionError,
   ResourceNotFoundError,
 } from '@chat-adapter/shared'
+import type { Logger } from 'chat'
+import { createLarkSdkLogger } from './lark-sdk-logger.ts'
 import type { LarkAdapterConfig, LarkCardBody, LarkFileType } from './types.ts'
-
-type ApiLogger = {
-  debug(...args: unknown[]): void
-  error(...args: unknown[]): void
-  info(...args: unknown[]): void
-  warn(...args: unknown[]): void
-}
 
 const ADAPTER_NAME = 'lark'
 const HTTP_RATE_LIMIT = 429
@@ -114,14 +109,6 @@ const mapError = (error: unknown): Error => {
   return new Error(String(error))
 }
 
-const bridgeLogger = (logger: ApiLogger) => ({
-  debug: logger.debug.bind(logger),
-  error: logger.error.bind(logger),
-  info: logger.info.bind(logger),
-  trace: logger.debug.bind(logger),
-  warn: logger.warn.bind(logger),
-})
-
 class LarkApiClient {
   readonly client: Client
 
@@ -130,7 +117,7 @@ class LarkApiClient {
       LarkAdapterConfig,
       'appId' | 'appSecret' | 'appType' | 'cache' | 'disableTokenCache' | 'domain' | 'httpInstance'
     >,
-    logger?: ApiLogger,
+    logger?: Logger,
   ) {
     const base = {
       appId: config.appId,
@@ -145,7 +132,7 @@ class LarkApiClient {
     if (logger) {
       this.client = new Client({
         ...base,
-        logger: bridgeLogger(logger),
+        logger: createLarkSdkLogger(logger),
         loggerLevel: LoggerLevel.debug,
       })
     } else {

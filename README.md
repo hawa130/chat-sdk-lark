@@ -177,22 +177,22 @@ Or set `LARK_DOMAIN=lark` in your environment variables.
 
 All options are auto-detected from environment variables when not provided. You can call `createLarkAdapter()` with no arguments if the env vars are set.
 
-| Option              | Type           | Default                                       | Description                                                   |
-| ------------------- | -------------- | --------------------------------------------- | ------------------------------------------------------------- |
-| `appId`             | `string`       | `LARK_APP_ID`                                 | Lark App ID                                                   |
-| `appSecret`         | `string`       | `LARK_APP_SECRET`                             | Lark App Secret                                               |
-| `encryptKey`        | `string`       | `LARK_ENCRYPT_KEY`                            | Encrypt key for event decryption                              |
-| `verificationToken` | `string`       | `LARK_VERIFICATION_TOKEN`                     | Verification token for v1 events                              |
-| `domain`            | `Domain`       | `Domain.Feishu`                               | API domain (`Domain.Feishu` or `Domain.Lark`)                 |
-| `userName`          | `string`       | Bot name from API                             | Bot display name override                                     |
-| `disableTokenCache` | `boolean`      | `false`                                       | Disable SDK's internal token caching                          |
-| `logger`            | `Logger`       | `ConsoleLogger`                               | Custom logger instance (from `chat` package)                  |
-| `appType`           | `AppType`      | `AppType.SelfBuild`                           | App type (`AppType.SelfBuild` or `AppType.ISV`)               |
-| `cache`             | `Cache`        | SDK default                                   | Custom token cache (e.g. Redis) for distributed deploys       |
-| `httpInstance`      | `HttpInstance` | SDK default                                   | Custom HTTP client for proxy, timeout, or interceptors        |
-| `streamingSummary`  | `string`       | `"[生成中...]"` (Lark default)                | Chat list preview text shown during card streaming            |
-| `incoming`          | `object`       | `{ events: "webhook", callbacks: "webhook" }` | Incoming transport selection for events and callbacks         |
-| `ws`                | `object`       | SDK defaults                                  | Extra Lark WS client options when any incoming mode is `"ws"` |
+| Option              | Type           | Default                                       | Description                                                                           |
+| ------------------- | -------------- | --------------------------------------------- | ------------------------------------------------------------------------------------- |
+| `appId`             | `string`       | `LARK_APP_ID`                                 | Lark App ID                                                                           |
+| `appSecret`         | `string`       | `LARK_APP_SECRET`                             | Lark App Secret                                                                       |
+| `encryptKey`        | `string`       | `LARK_ENCRYPT_KEY`                            | Encrypt key for event decryption                                                      |
+| `verificationToken` | `string`       | `LARK_VERIFICATION_TOKEN`                     | Verification token for v1 events                                                      |
+| `domain`            | `Domain`       | `Domain.Feishu`                               | API domain (`Domain.Feishu` or `Domain.Lark`)                                         |
+| `userName`          | `string`       | Bot name from API                             | Bot display name override                                                             |
+| `disableTokenCache` | `boolean`      | `false`                                       | Disable SDK's internal token caching                                                  |
+| `logger`            | `Logger`       | `ConsoleLogger`                               | Custom logger instance (from `chat` package); Lark SDK logs are normalized through it |
+| `appType`           | `AppType`      | `AppType.SelfBuild`                           | App type (`AppType.SelfBuild` or `AppType.ISV`)                                       |
+| `cache`             | `Cache`        | SDK default                                   | Custom token cache (e.g. Redis) for distributed deploys                               |
+| `httpInstance`      | `HttpInstance` | SDK default                                   | Custom HTTP client for proxy, timeout, or interceptors                                |
+| `streamingSummary`  | `string`       | `"[生成中...]"` (Lark default)                | Chat list preview text shown during card streaming                                    |
+| `incoming`          | `object`       | `{ events: "webhook", callbacks: "webhook" }` | Incoming transport selection for events and callbacks                                 |
+| `ws`                | `object`       | SDK defaults                                  | Extra Lark WS client options when any incoming mode is `"ws"`                         |
 
 `appId` and `appSecret` are required — either via config or environment variables. `Domain`, `AppType`, `Cache`, and `HttpInstance` types are re-exported from `@larksuiteoapi/node-sdk`.
 
@@ -226,6 +226,8 @@ The `ws` block maps directly to the Lark Node SDK `WSClient` constructor options
 | `autoReconnect` | `boolean`     | SDK default (`true`)             |
 | `loggerLevel`   | `LoggerLevel` | SDK default (`LoggerLevel.info`) |
 | `agent`         | `http.Agent`  | unset                            |
+
+`ws.loggerLevel` only controls the Lark SDK WS client's internal log level. The adapter still normalizes SDK log payloads before sending them to your configured logger.
 
 ## Environment variables
 
