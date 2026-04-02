@@ -935,8 +935,13 @@ describe('LarkAdapter', () => {
 
       expect(uploadedType).toBe('opus')
       expect(sentBodies).toHaveLength(1)
-      expect(sentBodies[0]).toMatchObject({ msg_type: 'audio', receive_id: 'oc_chat001' })
-      expect(JSON.parse(sentBodies[0].content ?? '{}')).toEqual({ file_key: 'file_audio_001' })
+      const audioBody = sentBodies[0]
+      expect(audioBody).toBeDefined()
+      if (!audioBody) {
+        throw new Error('Expected uploaded audio message payload')
+      }
+      expect(audioBody).toMatchObject({ msg_type: 'audio', receive_id: 'oc_chat001' })
+      expect(JSON.parse(audioBody.content ?? '{}')).toEqual({ file_key: 'file_audio_001' })
       expect(result.id).toBe('om_audio1')
     })
 
@@ -971,8 +976,13 @@ describe('LarkAdapter', () => {
 
       expect(uploadedType).toBe('mp4')
       expect(sentBodies).toHaveLength(1)
-      expect(sentBodies[0]).toMatchObject({ msg_type: 'media', receive_id: 'oc_chat001' })
-      expect(JSON.parse(sentBodies[0].content ?? '{}')).toEqual({ file_key: 'file_video_001' })
+      const videoBody = sentBodies[0]
+      expect(videoBody).toBeDefined()
+      if (!videoBody) {
+        throw new Error('Expected uploaded video message payload')
+      }
+      expect(videoBody).toMatchObject({ msg_type: 'media', receive_id: 'oc_chat001' })
+      expect(JSON.parse(videoBody.content ?? '{}')).toEqual({ file_key: 'file_video_001' })
       expect(result.id).toBe('om_video1')
     })
 

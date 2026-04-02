@@ -16,6 +16,7 @@ Keep APIs small, behavior explicit, and naming clear. Avoid cleverness unless it
 
 ```bash
 bun install              # Install dependencies
+bun run typecheck        # TypeScript type check
 bun run test             # Run tests (uses vitest on Node.js — do NOT use `bun test`)
 bun run lint             # Lint (type-aware, warnings are errors)
 bun run lint:fix         # Lint with auto-fix
@@ -29,7 +30,8 @@ After writing or modifying code, always run:
 
 1. `bun run fmt` — format changed files
 2. `bun run lint` — ensure no lint errors or warnings
-3. `bun run test` — ensure all tests pass
+3. `bun run typecheck` — ensure TypeScript types are sound
+4. `bun run test` — ensure all tests pass
 
 ## Type Safety
 
