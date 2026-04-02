@@ -205,7 +205,7 @@ const makeModalSubmitEvent = (
 })
 
 /** Modal form reset/cancel callback. */
-const makeModalResetEvent = (callbackId = 'feedback_form', notifyOnClose = true) => ({
+const makeModalResetEvent = (callbackId = 'feedback_form') => ({
   event: {
     action: {
       form_action_type: 'reset',
@@ -214,7 +214,6 @@ const makeModalResetEvent = (callbackId = 'feedback_form', notifyOnClose = true)
         __callbackId: callbackId,
         __contextId: 'ctx_123',
         __modal: '1',
-        ...(notifyOnClose ? { __notifyOnClose: '1' } : {}),
       },
     },
     context: {
@@ -235,11 +234,51 @@ const makeModalResetEvent = (callbackId = 'feedback_form', notifyOnClose = true)
   schema: '2.0',
 })
 
+/** Modal fallback close callback (separate from reset). */
+const makeModalCloseEvent = (
+  callbackId = 'feedback_form',
+  contextId = 'ctx_123',
+  privateMetadata?: string,
+  notifyOnClose = true,
+  modalTitle = 'Feedback',
+) => ({
+  event: {
+    action: {
+      tag: 'button',
+      value: {
+        __callbackId: callbackId,
+        __contextId: contextId,
+        __modal: '1',
+        __modalClose: '1',
+        __modalTitle: modalTitle,
+        ...(notifyOnClose ? { __notifyOnClose: '1' } : {}),
+        ...(privateMetadata ? { __privateMetadata: privateMetadata } : {}),
+      },
+    },
+    context: {
+      open_chat_id: 'oc_chat001',
+      open_message_id: 'om_form_msg001',
+    },
+    operator: { open_id: 'ou_user1' },
+    token: 'c-form-token-003',
+  },
+  header: {
+    app_id: 'test-app-id',
+    create_time: '1700000000000',
+    event_id: 'ev-form-close-001',
+    event_type: 'card.action.trigger',
+    tenant_key: 'test-tenant',
+    token: 'test-verification-token',
+  },
+  schema: '2.0',
+})
+
 const fixtures = {
   makeCardActionEvent,
   makeChallengeEvent,
   makeDMEvent,
   makeMessageEvent,
+  makeModalCloseEvent,
   makeModalResetEvent,
   makeModalSubmitEvent,
   makeReactionEvent,

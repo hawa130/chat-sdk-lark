@@ -220,7 +220,8 @@ describe('modalMapper.modalToLarkCard', () => {
     expect(submitBtn).toBeDefined()
     expect(submitBtn!.text.content).toBe('Go')
 
-    const cbValue = submitBtn!.behaviors[0]!
+    expect(submitBtn!.behaviors).toBeDefined()
+    const cbValue = submitBtn!.behaviors![0]!
     expect(cbValue.type).toBe('callback')
     if (cbValue.type === 'callback') {
       expect(cbValue.value['__modal']).toBe('1')
@@ -230,13 +231,12 @@ describe('modalMapper.modalToLarkCard', () => {
     }
   })
 
-  it('includes cancel button with notifyOnClose metadata', () => {
+  it('renders close button with callback metadata inside the form', () => {
     const result = modalMapper.modalToLarkCard(
       {
         callbackId: 'my_form',
         children: [],
         closeLabel: 'Nah',
-        notifyOnClose: true,
         title: 'Form',
         type: 'modal' as const,
       },
@@ -244,26 +244,66 @@ describe('modalMapper.modalToLarkCard', () => {
     )
 
     const buttons = findButtonsInForm(findForm(result))
-    const resetBtn = buttons.find((b) => b.form_action_type === 'reset')
-    expect(resetBtn).toBeDefined()
-    expect(resetBtn!.text.content).toBe('Nah')
-
-    const cbValue = resetBtn!.behaviors[0]!
+    const closeBtn = buttons.find((b) => b.form_action_type === undefined)
+    expect(closeBtn).toBeDefined()
+    expect(closeBtn!.text.content).toBe('Nah')
+    expect(closeBtn!.behaviors).toBeDefined()
+    const cbValue = closeBtn!.behaviors![0]!
+    expect(cbValue.type).toBe('callback')
     if (cbValue.type === 'callback') {
-      expect(cbValue.value['__notifyOnClose']).toBe('1')
+      expect(cbValue.value['__modalClose']).toBe('1')
+      expect(cbValue.value['__notifyOnClose']).toBeUndefined()
     }
   })
 
-  it('always includes cancel button with default label', () => {
+  it('encodes notifyOnClose metadata on the form close button', () => {
+    const result = modalMapper.modalToLarkCard(
+      {
+        callbackId: 'my_form',
+        children: [],
+        closeLabel: 'Close form',
+        notifyOnClose: true,
+        privateMetadata: '{"foo":"bar"}',
+        title: 'Form',
+        type: 'modal' as const,
+      },
+      'ctx_456',
+    )
+
+    const formButtons = findButtonsInForm(findForm(result))
+    expect(formButtons).toHaveLength(2)
+
+    const closeBtn = formButtons.find(
+      (b) =>
+        b.form_action_type === undefined &&
+        b.behaviors?.[0]?.type === 'callback' &&
+        b.behaviors[0].value['__modalClose'] === '1',
+    )
+    expect(closeBtn).toBeDefined()
+    expect(closeBtn!.text.content).toBe('Close form')
+    const cbValue = closeBtn!.behaviors![0]!
+    expect(cbValue.type).toBe('callback')
+    if (cbValue.type === 'callback') {
+      expect(cbValue.value['__modal']).toBe('1')
+      expect(cbValue.value['__callbackId']).toBe('my_form')
+      expect(cbValue.value['__privateMetadata']).toBe('{"foo":"bar"}')
+      expect(cbValue.value['__contextId']).toBe('ctx_456')
+      expect(cbValue.value['__modalClose']).toBe('1')
+      expect(cbValue.value['__notifyOnClose']).toBe('1')
+      expect(cbValue.value['__modalTitle']).toBe('Form')
+    }
+  })
+
+  it('uses cancel as the default lark fallback close label', () => {
     const result = modalMapper.modalToLarkCard(
       { callbackId: 'test', children: [], title: 'Test', type: 'modal' as const },
       'ctx',
     )
 
     const buttons = findButtonsInForm(findForm(result))
-    const resetBtn = buttons.find((b) => b.form_action_type === 'reset')
-    expect(resetBtn).toBeDefined()
-    expect(resetBtn!.text.content).toBe('Cancel')
+    const closeBtn = buttons.find((b) => b.form_action_type === undefined)
+    expect(closeBtn).toBeDefined()
+    expect(closeBtn!.text.content).toBe('Cancel')
   })
 
   it('uses default submit label when not specified', () => {

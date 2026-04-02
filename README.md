@@ -88,6 +88,8 @@ await bot.initialize()
 
 `bot.initialize()` is only required for non-webhook incoming transports. In webhook mode, initialization still happens automatically on the first `bot.webhooks.lark(request)` call.
 
+`openModal()` is implemented as a Lark form-card fallback rather than a native modal. The fallback renders `Submit` plus a callback-driven `Cancel` button inside the form. Clicking `Cancel` patches the original message into a lightweight closed-state placeholder; when `notifyOnClose` is enabled, the same button also dispatches `onModalClose`.
+
 ## Lark app setup
 
 ### 1. Create application

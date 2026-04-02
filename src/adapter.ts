@@ -1212,12 +1212,14 @@ export class LarkAdapter implements Adapter<LarkThreadId, LarkRaw> {
     const isModal = action.value?.['__modal'] === MODAL_MARKER
 
     if (isModal && action.form_action_type === 'reset') {
-      this.dispatchModalClose(action, userId, messageId, options)
       return
     }
 
     const task = this.resolveCardActionThreadId(chatId, messageId)
       .then((threadId) => {
+        if (isModal && action.value?.['__modalClose'] === MODAL_MARKER) {
+          return this.dispatchModalClose(action, userId, messageId, threadId, options)
+        }
         if (isModal && action.form_value) {
           this.dispatchModalSubmit(action, userId, messageId, threadId, options)
           return undefined
@@ -1229,6 +1231,37 @@ export class LarkAdapter implements Adapter<LarkThreadId, LarkRaw> {
         this.logger.error('Card action dispatch error', err)
       })
     options?.waitUntil?.(task)
+  }
+
+  private dispatchModalClose(
+    action: NonNullable<NonNullable<LarkCardActionBody['event']>['action']>,
+    userId: string,
+    messageId: string,
+    _threadId: string,
+    options?: WebhookOptions,
+  ): Promise<void> {
+    const callbackId = String(action.value?.['__callbackId'] ?? '')
+    const contextId = action.value?.['__contextId']
+    const notifyOnClose = action.value?.['__notifyOnClose'] === MODAL_MARKER
+    const privateMetadata = action.value?.['__privateMetadata']
+    const modalTitle = String(action.value?.['__modalTitle'] ?? '')
+
+    if (notifyOnClose) {
+      this.chat.processModalClose(
+        {
+          adapter: this,
+          callbackId,
+          privateMetadata,
+          raw: action,
+          user: minimalUser(userId),
+          viewId: messageId,
+        },
+        contextId,
+        options,
+      )
+    }
+
+    return this.patchClosedModalCard(messageId, modalTitle)
   }
 
   private dispatchModalSubmit(
@@ -1273,33 +1306,6 @@ export class LarkAdapter implements Adapter<LarkThreadId, LarkRaw> {
       .catch((err: unknown) => {
         this.logger.error('Modal submit processing error', err)
       })
-  }
-
-  private dispatchModalClose(
-    action: NonNullable<NonNullable<LarkCardActionBody['event']>['action']>,
-    userId: string,
-    messageId: string,
-    options?: WebhookOptions,
-  ): void {
-    if (action.value?.['__notifyOnClose'] !== '1') {
-      return
-    }
-    const callbackId = String(action.value?.['__callbackId'] ?? '')
-    const contextId = action.value?.['__contextId']
-    const privateMetadata = action.value?.['__privateMetadata']
-
-    this.chat.processModalClose(
-      {
-        adapter: this,
-        callbackId,
-        privateMetadata,
-        raw: action,
-        user: minimalUser(userId),
-        viewId: messageId,
-      },
-      contextId,
-      options,
-    )
   }
 
   private dispatchAction(
@@ -1366,6 +1372,35 @@ export class LarkAdapter implements Adapter<LarkThreadId, LarkRaw> {
         })
       }
     }
+  }
+
+  private async patchClosedModalCard(messageId: string, modalTitle?: string): Promise<void> {
+    const cardJson: LarkCardBody = {
+      body: {
+        elements: [
+          {
+            content: 'Form closed.',
+            element_id: 'modal_closed',
+            tag: 'markdown',
+          },
+        ],
+      },
+      config: { update_multi: true },
+      schema: '2.0',
+      ...(modalTitle
+        ? {
+            header: {
+              template: 'grey',
+              title: {
+                content: modalTitle,
+                tag: 'plain_text',
+              },
+            },
+          }
+        : {}),
+    }
+
+    await this.api.patchCard(messageId, JSON.stringify(cardJson))
   }
 
   private extractImageKey(uploadRes: { image_key?: string } | null): string {

@@ -148,15 +148,14 @@ const buildCloseButton = (modal: ModalInput, contextId: string): LarkButtonEleme
   behaviors: [
     {
       type: 'callback',
-      value: buildMetadataValue(
-        modal,
-        contextId,
-        modal.notifyOnClose ? { __notifyOnClose: '1' } : {},
-      ),
+      value: buildMetadataValue(modal, contextId, {
+        __modalClose: '1',
+        ...(modal.notifyOnClose ? { __notifyOnClose: '1' } : {}),
+        ...(modal.title ? { __modalTitle: modal.title } : {}),
+      }),
     },
   ],
   element_id: nextId(),
-  form_action_type: 'reset',
   name: nextId(),
   tag: 'button',
   text: { content: modal.closeLabel ?? DEFAULT_CLOSE_LABEL, tag: 'plain_text' },

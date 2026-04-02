@@ -196,7 +196,7 @@ interface LarkButtonElement {
   text: LarkPlainText
   type: string
   element_id: string
-  behaviors: LarkBehavior[]
+  behaviors?: LarkBehavior[]
   disabled?: boolean
   form_action_type?: 'submit' | 'reset'
   name?: string

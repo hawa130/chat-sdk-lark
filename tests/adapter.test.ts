@@ -11,6 +11,7 @@ const {
   makeChallengeEvent,
   makeDMEvent,
   makeMessageEvent,
+  makeModalCloseEvent,
   makeModalResetEvent,
   makeModalSubmitEvent,
   makeReactionEvent,
@@ -601,27 +602,84 @@ describe('LarkAdapter', () => {
       expect(call[1]).toBe('ctx_1')
     })
 
-    it('routes modal form reset with notifyOnClose to processModalClose', async () => {
+    it('ignores modal form reset callbacks for lark fallback modals', async () => {
       const adapter = makeAdapter()
       const mockChat = await initAdapter(adapter)
 
-      const event = makeModalResetEvent('feedback_form', true)
-      await adapter.handleWebhook(makeRequest(event))
-
-      expect(mockChat.processModalClose).toHaveBeenCalledTimes(1)
-      const call = mockChat.processModalClose.mock.calls[0]!
-      const closeEvent = call[0] as { callbackId: string }
-      expect(closeEvent.callbackId).toBe('feedback_form')
-    })
-
-    it('does not call processModalClose when notifyOnClose is false', async () => {
-      const adapter = makeAdapter()
-      const mockChat = await initAdapter(adapter)
-
-      const event = makeModalResetEvent('feedback_form', false)
+      const event = makeModalResetEvent('feedback_form')
       await adapter.handleWebhook(makeRequest(event))
 
       expect(mockChat.processModalClose).not.toHaveBeenCalled()
+    })
+
+    it('routes modal fallback close callbacks to processModalClose', async () => {
+      const adapter = makeAdapter()
+      const mockChat = await initAdapter(adapter)
+      mockChat.processModalClose.mockResolvedValue(undefined)
+      const waitUntil = vi.fn()
+      let patchedContent: unknown = undefined
+      server.use(
+        http.get(`${BASE}/open-apis/im/v1/messages/:message_id`, () =>
+          HttpResponse.json({
+            code: 0,
+            data: { items: [{ chat_id: 'oc_chat001', message_id: 'om_form_msg001' }] },
+          }),
+        ),
+        http.patch(`${BASE}/open-apis/im/v1/messages/:message_id`, async ({ request }) => {
+          patchedContent = await request.json()
+          return HttpResponse.json({ code: 0 })
+        }),
+      )
+
+      const event = makeModalCloseEvent('feedback_form', 'ctx_1', '{"k":"v"}', true, 'Feedback')
+      await adapter.handleWebhook(makeRequest(event), { waitUntil })
+
+      await new Promise((r) => setTimeout(r, 0))
+      expect(mockChat.processModalClose).toHaveBeenCalledTimes(1)
+      expect(waitUntil).toHaveBeenCalledTimes(1)
+
+      const call = mockChat.processModalClose.mock.calls[0]!
+      const closeEvent = call[0] as {
+        callbackId: string
+        privateMetadata: string
+        viewId: string
+      }
+      expect(closeEvent.callbackId).toBe('feedback_form')
+      expect(closeEvent.privateMetadata).toBe('{"k":"v"}')
+      expect(closeEvent.viewId).toBe('om_form_msg001')
+      expect(call[1]).toBe('ctx_1')
+      expect(patchedContent).toMatchObject({
+        content: expect.stringContaining('Form closed.'),
+      })
+    })
+
+    it('closes fallback modals without dispatching processModalClose when notifyOnClose is false', async () => {
+      const adapter = makeAdapter()
+      const mockChat = await initAdapter(adapter)
+      const waitUntil = vi.fn()
+      let patchedContent: unknown = undefined
+      server.use(
+        http.get(`${BASE}/open-apis/im/v1/messages/:message_id`, () =>
+          HttpResponse.json({
+            code: 0,
+            data: { items: [{ chat_id: 'oc_chat001', message_id: 'om_form_msg001' }] },
+          }),
+        ),
+        http.patch(`${BASE}/open-apis/im/v1/messages/:message_id`, async ({ request }) => {
+          patchedContent = await request.json()
+          return HttpResponse.json({ code: 0 })
+        }),
+      )
+
+      const event = makeModalCloseEvent('feedback_form', 'ctx_1', '{"k":"v"}', false, 'Feedback')
+      await adapter.handleWebhook(makeRequest(event), { waitUntil })
+
+      await new Promise((r) => setTimeout(r, 0))
+      expect(mockChat.processModalClose).not.toHaveBeenCalled()
+      expect(waitUntil).toHaveBeenCalledTimes(1)
+      expect(patchedContent).toMatchObject({
+        content: expect.stringContaining('Form closed.'),
+      })
     })
   })
 
