@@ -6,6 +6,7 @@
     "moduleDetection": "force",
     "jsx": "react-jsx",
     "jsxImportSource": "chat",
+    "outDir": "./dist",
     "allowJs": true,
     "moduleResolution": "bundler",
     "allowImportingTsExtensions": true,
@@ -21,5 +22,6 @@
     "noUnusedParameters": false,
     "noPropertyAccessFromIndexSignature": false
   },
-  "include": ["src/**/*", "tests/**/*"]
+  "include": ["src/**/*", "tests/**/*"],
+  "exclude": ["node_modules", "dist", "**/*.test.ts"]
 }

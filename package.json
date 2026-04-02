@@ -22,13 +22,14 @@
     "dist"
   ],
   "type": "module",
-  "main": "dist/index.mjs",
-  "module": "dist/index.mjs",
-  "types": "dist/index.d.mts",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.mjs",
+  "types": "./dist/index.d.mts",
   "exports": {
     ".": {
+      "types": "./dist/index.d.mts",
       "import": "./dist/index.mjs",
-      "types": "./dist/index.d.mts"
+      "require": "./dist/index.cjs"
     }
   },
   "scripts": {
@@ -37,6 +38,8 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
+    "dev": "tsdown --watch",
+    "clean": "rm -rf dist",
     "lint": "oxlint --type-aware --deny-warnings",
     "lint:fix": "oxlint --type-aware --fix",
     "fmt": "oxfmt --write .",
