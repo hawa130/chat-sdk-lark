@@ -162,6 +162,28 @@ describe('createLarkAdapter', () => {
     })
   })
 
+  it('defaults userInfoResolution to lazy', async () => {
+    process.env.LARK_APP_ID = 'id'
+    process.env.LARK_APP_SECRET = 'secret'
+    const { createLarkAdapter } = await import('../src/factory.ts')
+    const adapter = createLarkAdapter()
+    const config = (adapter as unknown as AdapterWithConfig).config
+
+    expect(config.userInfoResolution).toBe('lazy')
+  })
+
+  it('passes explicit userInfoResolution through to adapter', async () => {
+    process.env.LARK_APP_ID = 'id'
+    process.env.LARK_APP_SECRET = 'secret'
+    const { createLarkAdapter } = await import('../src/factory.ts')
+    const adapter = createLarkAdapter({
+      userInfoResolution: 'never',
+    })
+    const config = (adapter as unknown as AdapterWithConfig).config
+
+    expect(config.userInfoResolution).toBe('never')
+  })
+
   it('rejects ws incoming transport for ISV apps', async () => {
     process.env.LARK_APP_ID = 'id'
     process.env.LARK_APP_SECRET = 'secret'

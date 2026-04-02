@@ -405,6 +405,137 @@ describe('LarkAdapter', () => {
       expect((message as { text: string }).text).toContain('hello bot')
     })
 
+    it('does not lookup user names while building a message event by default', async () => {
+      let userLookupCount = 0
+      const adapter = makeAdapter()
+      const mockChat = await initAdapter(adapter)
+
+      server.use(
+        http.get(`${BASE}/open-apis/contact/v3/users/:userId`, () => {
+          userLookupCount += 1
+          return HttpResponse.json({ code: 0, data: { user: { name: 'Alice' } } })
+        }),
+      )
+
+      await adapter.handleWebhook(makeRequest(makeMessageEvent()))
+
+      const factory = mockChat.processMessage.mock.calls[0]![2] as () => Promise<{
+        author: { fullName: string; userId: string; userName: string }
+      }>
+      const message = await factory()
+
+      expect(userLookupCount).toBe(0)
+      expect(message.author.userId).toBe('ou_user1')
+      expect(message.author.fullName).toBe('ou_user1')
+      expect(message.author.userName).toBe('ou_user1')
+    })
+
+    it('starts lookup when lazy fullName is read and updates subsequent reads', async () => {
+      let userLookupCount = 0
+      const adapter = makeAdapter()
+      const mockChat = await initAdapter(adapter)
+
+      server.use(
+        http.get(`${BASE}/open-apis/contact/v3/users/:userId`, () => {
+          userLookupCount += 1
+          return HttpResponse.json({ code: 0, data: { user: { name: 'Alice' } } })
+        }),
+      )
+
+      await adapter.handleWebhook(makeRequest(makeMessageEvent()))
+
+      const factory = mockChat.processMessage.mock.calls[0]![2] as () => Promise<{
+        author: { fullName: string; userName: string }
+      }>
+      const message = await factory()
+
+      expect(message.author.fullName).toBe('ou_user1')
+
+      await vi.waitFor(() => {
+        expect(message.author.fullName).toBe('Alice')
+      })
+      expect(userLookupCount).toBe(1)
+      expect(message.author.userName).toBe('Alice')
+    })
+
+    it('deduplicates concurrent lazy reads for the same user', async () => {
+      let userLookupCount = 0
+      const adapter = makeAdapter()
+      const mockChat = await initAdapter(adapter)
+
+      server.use(
+        http.get(`${BASE}/open-apis/contact/v3/users/:userId`, async () => {
+          userLookupCount += 1
+          await new Promise((resolve) => setTimeout(resolve, 10))
+          return HttpResponse.json({ code: 0, data: { user: { name: 'Alice' } } })
+        }),
+      )
+
+      await adapter.handleWebhook(makeRequest(makeMessageEvent()))
+
+      const factory = mockChat.processMessage.mock.calls[0]![2] as () => Promise<{
+        author: { fullName: string; userName: string }
+      }>
+      const firstMessage = await factory()
+      const secondMessage = await factory()
+
+      expect(firstMessage.author.fullName).toBe('ou_user1')
+      expect(secondMessage.author.userName).toBe('ou_user1')
+
+      await vi.waitFor(() => {
+        expect(firstMessage.author.fullName).toBe('Alice')
+        expect(secondMessage.author.userName).toBe('Alice')
+      })
+      expect(userLookupCount).toBe(1)
+    })
+
+    it('uses mention names as free cached names without calling contacts', async () => {
+      let userLookupCount = 0
+      const adapter = makeAdapter()
+      const mockChat = await initAdapter(adapter)
+      const event = makeMessageEvent({
+        event: {
+          message: {
+            chat_id: 'oc_chat001',
+            chat_type: 'group',
+            content: '{"text":"hello @_user_1"}',
+            create_time: '1700000000000',
+            mentions: [
+              {
+                id: { open_id: 'ou_user1' },
+                key: '@_user_1',
+                name: 'Mention Alice',
+              },
+            ],
+            message_id: 'om_msg001',
+            message_type: 'text',
+          },
+          sender: {
+            sender_id: { open_id: 'ou_user1' },
+            sender_type: 'user',
+          },
+        },
+      })
+
+      server.use(
+        http.get(`${BASE}/open-apis/contact/v3/users/:userId`, () => {
+          userLookupCount += 1
+          return HttpResponse.json({ code: 0, data: { user: { name: 'ShouldNotBeCalled' } } })
+        }),
+      )
+
+      await adapter.handleWebhook(makeRequest(event))
+
+      const factory = mockChat.processMessage.mock.calls[0]![2] as () => Promise<{
+        author: { fullName: string; userName: string }
+      }>
+      const message = await factory()
+
+      expect(message.author.fullName).toBe('Mention Alice')
+      expect(message.author.userName).toBe('Mention Alice')
+      expect(userLookupCount).toBe(0)
+    })
+
     it('does not route message webhooks when events use ws transport', async () => {
       const adapter = makeAdapter({
         incoming: { callbacks: 'webhook', events: 'ws' },
@@ -451,6 +582,45 @@ describe('LarkAdapter', () => {
         }>
       )()) as { threadId: string }
       expect(adapter.decodeThreadId(message.threadId).threadId).toBe('omt_thread001')
+    })
+
+    it('eager mode resolves message authors before returning the message', async () => {
+      const adapter = makeAdapter({ userInfoResolution: 'eager' })
+      const mockChat = await initAdapter(adapter)
+
+      await adapter.handleWebhook(makeRequest(makeMessageEvent()))
+
+      const factory = mockChat.processMessage.mock.calls[0]![2] as () => Promise<{
+        author: { fullName: string; userName: string }
+      }>
+      const message = await factory()
+
+      expect(message.author.fullName).toBe('Alice')
+      expect(message.author.userName).toBe('Alice')
+    })
+
+    it('never mode keeps fallback names even when fullName is read', async () => {
+      let userLookupCount = 0
+      const adapter = makeAdapter({ userInfoResolution: 'never' })
+      const mockChat = await initAdapter(adapter)
+
+      server.use(
+        http.get(`${BASE}/open-apis/contact/v3/users/:userId`, () => {
+          userLookupCount += 1
+          return HttpResponse.json({ code: 0, data: { user: { name: 'Alice' } } })
+        }),
+      )
+
+      await adapter.handleWebhook(makeRequest(makeMessageEvent()))
+
+      const factory = mockChat.processMessage.mock.calls[0]![2] as () => Promise<{
+        author: { fullName: string; userName: string }
+      }>
+      const message = await factory()
+
+      expect(message.author.fullName).toBe('ou_user1')
+      expect(message.author.userName).toBe('ou_user1')
+      expect(userLookupCount).toBe(0)
     })
 
     it('routes reaction event to processReaction', async () => {
@@ -502,11 +672,88 @@ describe('LarkAdapter', () => {
       expect(reactionEvent.threadId).toContain('lark:')
       expect(reactionEvent.messageId).toBe('om_msg001')
       expect(reactionEvent.rawEmoji).toBe('THUMBSUP')
-      expect(reactionEvent.user.fullName).toBe('Alice')
-      expect(reactionEvent.user.userName).toBe('Alice')
+      expect(reactionEvent.user.fullName).toBe('ou_user1')
+      expect(reactionEvent.user.userName).toBe('ou_user1')
       // Verify threadId decodes back to the chat from getMessage
       expect(adapter.channelIdFromThreadId(reactionEvent.threadId)).toBe('oc_chat001')
       expect(adapter.decodeThreadId(reactionEvent.threadId).threadId).toBe('omt_thread001')
+    })
+
+    it('does not lookup reaction user names before dispatch by default', async () => {
+      let userLookupCount = 0
+      const adapter = makeAdapter()
+      const mockChat = await initAdapter(adapter)
+
+      server.use(
+        http.get(`${BASE}/open-apis/contact/v3/users/:userId`, () => {
+          userLookupCount += 1
+          return HttpResponse.json({ code: 0, data: { user: { name: 'Alice' } } })
+        }),
+        http.get(`${BASE}/open-apis/im/v1/messages/:message_id`, () =>
+          HttpResponse.json({
+            code: 0,
+            data: {
+              items: [
+                {
+                  chat_id: 'oc_chat001',
+                  message_id: 'om_msg001',
+                  root_id: 'om_root001',
+                  thread_id: 'omt_thread001',
+                },
+              ],
+            },
+          }),
+        ),
+      )
+
+      await adapter.handleWebhook(makeRequest(makeReactionEvent('created')))
+
+      await vi.waitFor(() => {
+        expect(mockChat.processReaction).toHaveBeenCalledTimes(1)
+      })
+
+      const reactionEvent = mockChat.processReaction.mock.calls[0]![0] as {
+        user: { fullName: string; userId: string; userName: string }
+      }
+      expect(userLookupCount).toBe(0)
+      expect(reactionEvent.user.userId).toBe('ou_user1')
+      expect(reactionEvent.user.fullName).toBe('ou_user1')
+      expect(reactionEvent.user.userName).toBe('ou_user1')
+    })
+
+    it('eager mode resolves reaction users before dispatch', async () => {
+      const adapter = makeAdapter({ userInfoResolution: 'eager' })
+      const mockChat = await initAdapter(adapter)
+
+      server.use(
+        http.get(`${BASE}/open-apis/im/v1/messages/:message_id`, () =>
+          HttpResponse.json({
+            code: 0,
+            data: {
+              items: [
+                {
+                  chat_id: 'oc_chat001',
+                  message_id: 'om_msg001',
+                  root_id: 'om_root001',
+                  thread_id: 'omt_thread001',
+                },
+              ],
+            },
+          }),
+        ),
+      )
+
+      await adapter.handleWebhook(makeRequest(makeReactionEvent('created')))
+
+      await vi.waitFor(() => {
+        expect(mockChat.processReaction).toHaveBeenCalledTimes(1)
+      })
+
+      const reactionEvent = mockChat.processReaction.mock.calls[0]![0] as {
+        user: { fullName: string; userName: string }
+      }
+      expect(reactionEvent.user.fullName).toBe('Alice')
+      expect(reactionEvent.user.userName).toBe('Alice')
     })
 
     it('keeps unknown Feishu reaction types as-is when normalizing webhook events', async () => {
@@ -1647,7 +1894,7 @@ describe('LarkAdapter', () => {
       expect(capturedUrl?.searchParams.get('sort_type')).toBe('ByCreateTimeAsc')
     })
 
-    it('fetchMessages builds author from sender in API response', async () => {
+    it('fetchMessages builds fallback author from sender in API response by default', async () => {
       server.use(
         tokenHandler,
         http.get(`${BASE}/open-apis/im/v1/messages`, () =>
@@ -1672,11 +1919,43 @@ describe('LarkAdapter', () => {
       const result = await adapter.fetchMessages(threadId)
       const msg = result.messages[0]!
       expect(msg.author.userId).toBe('ou_user1')
-      expect(msg.author.fullName).toBe('Alice')
-      expect(msg.author.userName).toBe('Alice')
+      expect(msg.author.fullName).toBe('ou_user1')
+      expect(msg.author.userName).toBe('ou_user1')
       expect(msg.author.isBot).toBe(false)
       expect(msg.author.isMe).toBe(false)
       expect(msg.metadata.edited).toBe(true)
+    })
+
+    it('fetchMessages eagerly resolves author names when configured', async () => {
+      adapter = makeAdapter({ userInfoResolution: 'eager' })
+      await initAdapter(adapter)
+
+      server.use(
+        tokenHandler,
+        http.get(`${BASE}/open-apis/im/v1/messages`, () =>
+          HttpResponse.json({
+            code: 0,
+            data: {
+              has_more: false,
+              items: [
+                {
+                  body: { content: '{"text":"from user"}' },
+                  create_time: '1700000000000',
+                  message_id: 'om_s1',
+                  sender: { id: 'ou_user1', id_type: 'open_id', sender_type: 'user' },
+                },
+              ],
+            },
+          }),
+        ),
+      )
+
+      const threadId = adapter.encodeThreadId({ chatId: 'oc_chat001' })
+      const result = await adapter.fetchMessages(threadId)
+      const msg = result.messages[0]!
+
+      expect(msg.author.fullName).toBe('Alice')
+      expect(msg.author.userName).toBe('Alice')
     })
 
     it('fetchMessages returns unknownAuthor when sender is absent', async () => {
@@ -1787,10 +2066,11 @@ describe('LarkAdapter', () => {
 
   describe('DM', () => {
     let adapter: LarkAdapter = undefined!
+    let mockChat: ReturnType<typeof makeMockChat> = undefined!
 
     beforeEach(async () => {
       adapter = makeAdapter()
-      await initAdapter(adapter)
+      mockChat = await initAdapter(adapter)
     })
 
     it('openDM creates p2p chat and returns threadId', async () => {
@@ -1838,6 +2118,21 @@ describe('LarkAdapter', () => {
       const threadId = adapter.encodeThreadId({ chatId: 'oc_dm001' })
       await adapter.fetchThread(threadId)
       expect(adapter.isDM(threadId)).toBe(true)
+    })
+
+    it('keeps channel cache in memory without persisting state adapter entries', async () => {
+      server.use(
+        http.post(`${BASE}/open-apis/im/v1/chats`, () =>
+          HttpResponse.json({ code: 0, data: { chat_id: 'oc_dm_cache' } }),
+        ),
+      )
+
+      await adapter.openDM('ou_user1')
+
+      const channelSetCalls = mockChat._state.set.mock.calls.filter((call: unknown[]) =>
+        String(call[0]).startsWith('lark:channel:'),
+      )
+      expect(channelSetCalls).toHaveLength(0)
     })
   })
 
@@ -2216,7 +2511,15 @@ describe('LarkAdapter', () => {
       const mockChat = await initAdapter(adapter)
 
       await adapter.handleWebhook(makeRequest(makeUserEvent('ou_user1')))
-      await executeFactory(mockChat)
+      const message = (await executeFactory(mockChat)) as {
+        author: { fullName: string; userName: string }
+      }
+
+      expect(message.author.fullName).toBe('ou_user1')
+
+      await vi.waitFor(() => {
+        expect(message.author.userName).toBe('Alice')
+      })
 
       const userSetCalls = mockChat._state.set.mock.calls.filter((call: unknown[]) =>
         (call[0] as string).startsWith('lark:user:'),
@@ -2224,7 +2527,7 @@ describe('LarkAdapter', () => {
       expect(userSetCalls.length).toBeGreaterThanOrEqual(1)
       const [key, value, ttl] = userSetCalls[0]!
       expect(key).toBe('lark:user:ou_user1')
-      expect(value).toEqual({ name: 'Alice' })
+      expect(value).toBe('Alice')
       expect(ttl).toBe(USER_CACHE_TTL_MS)
     })
 
@@ -2232,12 +2535,18 @@ describe('LarkAdapter', () => {
       const adapter = makeAdapter()
       const mockChat = await initAdapter(adapter)
 
-      mockChat._state.get.mockResolvedValueOnce({ name: 'CachedBob' })
+      mockChat._state.get.mockResolvedValueOnce('CachedBob')
 
       await adapter.handleWebhook(makeRequest(makeUserEvent('ou_user2')))
-      const msg = await executeFactory(mockChat)
+      const msg = (await executeFactory(mockChat)) as {
+        author: { fullName: string; userName: string }
+      }
 
-      expect((msg as { author: { fullName: string } }).author.fullName).toBe('CachedBob')
+      expect(msg.author.fullName).toBe('ou_user2')
+
+      await vi.waitFor(() => {
+        expect(msg.author.userName).toBe('CachedBob')
+      })
     })
 
     it('uses in-memory cache on repeated calls', async () => {
@@ -2246,13 +2555,23 @@ describe('LarkAdapter', () => {
 
       // First call: API lookup, seeds in-memory cache
       await adapter.handleWebhook(makeRequest(makeUserEvent('ou_user1')))
-      await executeFactory(mockChat)
+      const firstMessage = (await executeFactory(mockChat)) as {
+        author: { fullName: string; userName: string }
+      }
+      void firstMessage.author.fullName
+      await vi.waitFor(() => {
+        expect(firstMessage.author.userName).toBe('Alice')
+      })
 
       // Clear state mock history — second call should hit in-memory cache
       mockChat._state.get.mockClear()
 
       await adapter.handleWebhook(makeRequest(makeUserEvent('ou_user1')))
-      await executeFactory(mockChat)
+      const secondMessage = (await executeFactory(mockChat)) as {
+        author: { fullName: string }
+      }
+
+      expect(secondMessage.author.fullName).toBe('Alice')
 
       // state.get should not have been called — in-memory cache handled it
       expect(mockChat._state.get).not.toHaveBeenCalledWith('lark:user:ou_user1')
@@ -2269,7 +2588,18 @@ describe('LarkAdapter', () => {
       )
 
       await adapter.handleWebhook(makeRequest(makeUserEvent('ou_user_bad')))
-      await executeFactory(mockChat)
+      const message = (await executeFactory(mockChat)) as {
+        author: { fullName: string }
+      }
+      void message.author.fullName
+
+      await vi.waitFor(() => {
+        expect(mockChat._state.set).toHaveBeenCalledWith(
+          'lark:user:ou_user_bad',
+          'ou_user_bad',
+          FAILED_LOOKUP_TTL_MS,
+        )
+      })
 
       const userSetCalls = mockChat._state.set.mock.calls.filter((call: unknown[]) =>
         (call[0] as string).startsWith('lark:user:'),
@@ -2277,8 +2607,41 @@ describe('LarkAdapter', () => {
       expect(userSetCalls.length).toBeGreaterThanOrEqual(1)
       const [key, value, ttl] = userSetCalls[0]!
       expect(key).toBe('lark:user:ou_user_bad')
-      expect(value).toEqual({ name: 'ou_user_bad' })
+      expect(value).toBe('ou_user_bad')
       expect(ttl).toBe(FAILED_LOOKUP_TTL_MS)
+    })
+
+    it('logs failed lookups at debug instead of warn', async () => {
+      const logger = {
+        child: () => logger,
+        debug: vi.fn(),
+        error: vi.fn(),
+        info: vi.fn(),
+        warn: vi.fn(),
+      }
+      const adapter = makeAdapter({ logger })
+      const mockChat = await initAdapter(adapter)
+
+      server.use(
+        http.get(`${BASE}/open-apis/contact/v3/users/:userId`, () =>
+          HttpResponse.json({ code: 1 }, { status: 500 }),
+        ),
+      )
+
+      await adapter.handleWebhook(makeRequest(makeUserEvent('ou_user_bad')))
+      const message = (await executeFactory(mockChat)) as {
+        author: { fullName: string }
+      }
+      void message.author.fullName
+
+      await vi.waitFor(() => {
+        expect(logger.debug).toHaveBeenCalledWith('Failed to lookup user', {
+          openId: 'ou_user_bad',
+        })
+      })
+      expect(logger.warn).not.toHaveBeenCalledWith('Failed to lookup user', {
+        openId: 'ou_user_bad',
+      })
     })
 
     it('seeds cache from webhook mentions', async () => {
@@ -2312,7 +2675,7 @@ describe('LarkAdapter', () => {
         (call: unknown[]) => call[0] === 'lark:user:ou_mentioned1',
       )
       expect(mentionSetCall).toBeDefined()
-      expect(mentionSetCall![1]).toEqual({ name: 'MentionedAlice' })
+      expect(mentionSetCall![1]).toBe('MentionedAlice')
       expect(mentionSetCall![2]).toBe(USER_CACHE_TTL_MS)
     })
   })

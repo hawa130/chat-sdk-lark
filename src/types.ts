@@ -8,6 +8,7 @@ interface LarkThreadId {
 }
 
 type LarkIncomingMode = 'disabled' | 'webhook' | 'ws'
+type LarkUserInfoResolutionStrategy = 'eager' | 'lazy' | 'never'
 
 interface LarkIncomingConfig {
   /** Incoming transport for subscribed events like messages and reactions */
@@ -54,6 +55,8 @@ interface LarkAdapterConfig {
   streamingSummary?: string
   /** Incoming transport selection for events and callbacks */
   incoming?: LarkIncomingConfig
+  /** User display-name resolution strategy for incoming and fetched users */
+  userInfoResolution?: LarkUserInfoResolutionStrategy
   /** Optional Lark WS client config when incoming transport uses ws */
   ws?: LarkWsConfig
 }
@@ -422,6 +425,7 @@ export type {
   LarkTableElement,
   LarkTextContent,
   LarkThreadId,
+  LarkUserInfoResolutionStrategy,
   LarkWebhookBody,
   LarkWsAgent,
   LarkWsConfig,

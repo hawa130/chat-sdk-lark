@@ -138,6 +138,7 @@ Add the following scopes to your app. The table maps each permission to the adap
 | `im:message.group_at_msg:readonly` | `im.message.receive_v1` event (group @bot)    | Receive @bot messages in group chats |
 | `im:message.p2p_msg:readonly`      | `im.message.receive_v1` event (DM)            | Receive direct messages              |
 | `im:chat:readonly`                 | `GET /im/v1/chats/:chat_id`                   | `fetchChannelInfo`                   |
+| `contact:contact.base:readonly`    | `GET /contact/v3/users/:user_id`              | Allow contact-based user lookup      |
 | `contact:user.base:readonly`       | `GET /contact/v3/users/:user_id` (name field) | Resolve user display names           |
 
 **Feature-specific — add based on the features you use:**
@@ -152,6 +153,8 @@ Add the following scopes to your app. The table maps each permission to the adap
 > **Note:** `im:message:readonly` also covers reaction events (`im.message.reaction.created/deleted_v1`) and listing reactions, so no additional permission is needed for receiving reaction events.
 
 > **Note:** For the message APIs used by this adapter, `im:message:send_as_bot` is sufficient for send, edit, delete, and app-sent card updates where Lark marks permissions as "any one of".
+
+> **Note:** When resolving user display names with `tenant_access_token`, the app also needs the target users to be included in the app's contact scope (通讯录权限范围).
 
 ### 4. Publish
 
@@ -177,24 +180,27 @@ Or set `LARK_DOMAIN=lark` in your environment variables.
 
 All options are auto-detected from environment variables when not provided. You can call `createLarkAdapter()` with no arguments if the env vars are set.
 
-| Option              | Type           | Default                                       | Description                                                                           |
-| ------------------- | -------------- | --------------------------------------------- | ------------------------------------------------------------------------------------- |
-| `appId`             | `string`       | `LARK_APP_ID`                                 | Lark App ID                                                                           |
-| `appSecret`         | `string`       | `LARK_APP_SECRET`                             | Lark App Secret                                                                       |
-| `encryptKey`        | `string`       | `LARK_ENCRYPT_KEY`                            | Encrypt key for event decryption                                                      |
-| `verificationToken` | `string`       | `LARK_VERIFICATION_TOKEN`                     | Verification token for v1 events                                                      |
-| `domain`            | `Domain`       | `Domain.Feishu`                               | API domain (`Domain.Feishu` or `Domain.Lark`)                                         |
-| `userName`          | `string`       | Bot name from API                             | Bot display name override                                                             |
-| `disableTokenCache` | `boolean`      | `false`                                       | Disable SDK's internal token caching                                                  |
-| `logger`            | `Logger`       | `ConsoleLogger`                               | Custom logger instance (from `chat` package); Lark SDK logs are normalized through it |
-| `appType`           | `AppType`      | `AppType.SelfBuild`                           | App type (`AppType.SelfBuild` or `AppType.ISV`)                                       |
-| `cache`             | `Cache`        | SDK default                                   | Custom token cache (e.g. Redis) for distributed deploys                               |
-| `httpInstance`      | `HttpInstance` | SDK default                                   | Custom HTTP client for proxy, timeout, or interceptors                                |
-| `streamingSummary`  | `string`       | `"[生成中...]"` (Lark default)                | Chat list preview text shown during card streaming                                    |
-| `incoming`          | `object`       | `{ events: "webhook", callbacks: "webhook" }` | Incoming transport selection for events and callbacks                                 |
-| `ws`                | `object`       | SDK defaults                                  | Extra Lark WS client options when any incoming mode is `"ws"`                         |
+| Option               | Type                           | Default                                       | Description                                                                           |
+| -------------------- | ------------------------------ | --------------------------------------------- | ------------------------------------------------------------------------------------- |
+| `appId`              | `string`                       | `LARK_APP_ID`                                 | Lark App ID                                                                           |
+| `appSecret`          | `string`                       | `LARK_APP_SECRET`                             | Lark App Secret                                                                       |
+| `encryptKey`         | `string`                       | `LARK_ENCRYPT_KEY`                            | Encrypt key for event decryption                                                      |
+| `verificationToken`  | `string`                       | `LARK_VERIFICATION_TOKEN`                     | Verification token for v1 events                                                      |
+| `domain`             | `Domain`                       | `Domain.Feishu`                               | API domain (`Domain.Feishu` or `Domain.Lark`)                                         |
+| `userName`           | `string`                       | Bot name from API                             | Bot display name override                                                             |
+| `disableTokenCache`  | `boolean`                      | `false`                                       | Disable SDK's internal token caching                                                  |
+| `logger`             | `Logger`                       | `ConsoleLogger`                               | Custom logger instance (from `chat` package); Lark SDK logs are normalized through it |
+| `appType`            | `AppType`                      | `AppType.SelfBuild`                           | App type (`AppType.SelfBuild` or `AppType.ISV`)                                       |
+| `cache`              | `Cache`                        | SDK default                                   | Custom token cache (e.g. Redis) for distributed deploys                               |
+| `httpInstance`       | `HttpInstance`                 | SDK default                                   | Custom HTTP client for proxy, timeout, or interceptors                                |
+| `streamingSummary`   | `string`                       | `"[生成中...]"` (Lark default)                | Chat list preview text shown during card streaming                                    |
+| `incoming`           | `object`                       | `{ events: "webhook", callbacks: "webhook" }` | Incoming transport selection for events and callbacks                                 |
+| `userInfoResolution` | `'lazy' \| 'eager' \| 'never'` | `'lazy'`                                      | Controls when the adapter resolves real user display names from Lark contacts         |
+| `ws`                 | `object`                       | SDK defaults                                  | Extra Lark WS client options when any incoming mode is `"ws"`                         |
 
 `appId` and `appSecret` are required — either via config or environment variables. `Domain`, `AppType`, `Cache`, and `HttpInstance` types are re-exported from `@larksuiteoapi/node-sdk`.
+
+By default, the adapter returns minimal user info immediately and only resolves real display names when `fullName` or `userName` is actually read. This keeps message, reaction, card, and modal handling off the contacts API fast path.
 
 ### Incoming transport
 
@@ -304,10 +310,15 @@ LARK_DOMAIN=feishu               # Optional, "feishu" (default) or "lark"
 
 ### User names showing as IDs
 
-The adapter resolves user display names via the contacts API. If names show as `ou_xxxxx` IDs:
+`lazy` is the default strategy. If your app never reads `user.fullName` or `user.userName`, the adapter will keep using `open_id` fallbacks and will not call the contacts API.
 
-1. Add `contact:contact.base:readonly` and `contact:user.base:readonly` permissions
-2. Expand the app's contact scope (通讯录权限范围) in the Lark admin console to include the users you need
+If names show as `ou_xxxxx` IDs and you want real display names:
+
+1. Keep `userInfoResolution` as `lazy` or set it to `eager`
+2. Add `contact:contact.base:readonly` and `contact:user.base:readonly` permissions
+3. Expand the app's contact scope (通讯录权限范围) in the Lark admin console to include the users you need
+
+Set `userInfoResolution: 'never'` to fully disable contact lookups.
 
 ### WebSocket mode does not receive traffic
 

@@ -72,6 +72,7 @@ const resolveConfig = (config?: Partial<LarkAdapterConfig>): LarkAdapterConfig =
     ...(config?.logger !== undefined && { logger: config.logger }),
     ...(config?.streamingSummary !== undefined && { streamingSummary: config.streamingSummary }),
     incoming,
+    userInfoResolution: config?.userInfoResolution ?? 'lazy',
     ...(config?.ws !== undefined && { ws: config.ws }),
   }
 }

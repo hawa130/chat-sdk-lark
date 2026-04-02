@@ -49,6 +49,7 @@ import { cardMapper } from './card-mapper.ts'
 import { createLarkSdkLogger } from './lark-sdk-logger.ts'
 import type { ModalInput } from './modal-mapper.ts'
 import { MODAL_MARKER, modalMapper } from './modal-mapper.ts'
+import { LayeredCache } from './layered-cache.ts'
 
 /** Extract the first parameter type of an event handler from the SDK's EventHandles. */
 type EventData<TKey extends keyof EventHandles> =
@@ -64,6 +65,19 @@ type ChannelCacheEntry = {
   chatType?: string
   external?: boolean
   name?: string
+}
+type LarkUserIdentity = {
+  fullName: string
+  isBot: boolean | 'unknown'
+  isMe: boolean
+  userId: string
+  userName: string
+}
+type LarkUserIdentityInput = {
+  isBot: boolean | 'unknown'
+  isMe: boolean
+  mentionName?: string
+  userId: string
 }
 
 /** Recursive node shape for traversing card trees to upload images. */
@@ -170,21 +184,6 @@ const extractText = (content: string): string => {
   }
 }
 
-const buildAuthor = (raw: LarkRawMessage, botOpenId: string) => {
-  const { sender } = raw
-  const openId = sender.sender_id?.open_id ?? ''
-  const isBot = sender.sender_type === 'bot'
-  const isMe = openId === botOpenId
-  const mentionName = raw.message.mentions?.find((mention) => mention.id.open_id === openId)?.name
-  return {
-    fullName: mentionName ?? openId,
-    isBot,
-    isMe,
-    userId: openId,
-    userName: openId,
-  }
-}
-
 const buildIsMention = (raw: LarkRawMessage, botOpenId: string): boolean => {
   if (raw.message.chat_type === 'p2p') {
     return true
@@ -196,16 +195,8 @@ const unknownAuthor = () => ({
   fullName: 'unknown',
   isBot: 'unknown' as const,
   isMe: false,
-  userId: '',
-  userName: '',
-})
-
-const minimalUser = (userId: string) => ({
-  fullName: '',
-  isBot: false,
-  isMe: false,
-  userId,
-  userName: '',
+  userId: 'unknown',
+  userName: 'unknown',
 })
 
 const chunkToText = (chunk: string | StreamChunk): string => {
@@ -294,7 +285,6 @@ const directionToSortType = (direction?: string): LarkSortType => {
 }
 
 const USER_CACHE_TTL_MS = 8 * 24 * 60 * 60 * 1000
-const CHANNEL_CACHE_TTL_MS = 8 * 24 * 60 * 60 * 1000
 const FAILED_LOOKUP_TTL_MS = 1 * 24 * 60 * 60 * 1000
 const EPHEMERAL_ELEMENT_ID = 'eph_md'
 const WS_OPEN_STATE = 1
@@ -320,7 +310,7 @@ export class LarkAdapter implements Adapter<LarkThreadId, LarkRaw> {
   private readonly webhookParser: EventDispatcher
   private readonly channelTypeMap = new Map<string, ChannelCacheEntry>()
   private readonly threadRootMessageMap = new Map<string, string>()
-  private readonly userNameCache = new Map<string, string>()
+  private readonly userInfoCache: LayeredCache<string>
   private wsClient?: WSClient
   private wsStartPromise?: Promise<void>
 
@@ -329,10 +319,16 @@ export class LarkAdapter implements Adapter<LarkThreadId, LarkRaw> {
   }
 
   constructor(config: LarkAdapterConfig) {
-    this.config = config
+    this.config = {
+      ...config,
+      userInfoResolution: config.userInfoResolution ?? 'lazy',
+    }
     this.logger = config.logger ?? new ConsoleLogger('info').child('lark')
     this.sdkLogger = createLarkSdkLogger(this.logger)
     this.resolvedUserName = config.userName ?? 'LarkBot'
+    this.userInfoCache = new LayeredCache<string>({
+      keyPrefix: 'lark:user:',
+    })
     this.webhookParser = new EventDispatcher({
       encryptKey: config.encryptKey,
       logger: this.sdkLogger,
@@ -368,6 +364,18 @@ export class LarkAdapter implements Adapter<LarkThreadId, LarkRaw> {
     return this.shouldUseWsForCallbacks() || this.shouldUseWsForEvents()
   }
 
+  private shouldLookupUsersAtAll(): boolean {
+    return this.config.userInfoResolution !== 'never'
+  }
+
+  private shouldLookupUsersEagerly(): boolean {
+    return this.config.userInfoResolution === 'eager'
+  }
+
+  private shouldLookupUsersLazily(): boolean {
+    return this.config.userInfoResolution === 'lazy'
+  }
+
   async initialize(chat: ChatInstance): Promise<void> {
     this.chat = chat
     this.api = new LarkApiClient(
@@ -388,13 +396,14 @@ export class LarkAdapter implements Adapter<LarkThreadId, LarkRaw> {
     if (info.bot?.app_name && !this.config.userName) {
       this.resolvedUserName = info.bot.app_name
     }
+    this.userInfoCache.setState(chat.getState())
     await this.startWsClientIfNeeded()
     this.logger.info('Initialized', { botOpenId: this.botOpenId })
   }
 
   async disconnect(): Promise<void> {
     this.stopWsClient()
-    this.userNameCache.clear()
+    this.userInfoCache.clear()
     this.channelTypeMap.clear()
     this.threadRootMessageMap.clear()
   }
@@ -426,6 +435,86 @@ export class LarkAdapter implements Adapter<LarkThreadId, LarkRaw> {
 
   channelIdFromThreadId(threadId: string): string {
     return this.decodeThreadId(threadId).chatId
+  }
+
+  private getUserFallbackName(userId: string): string {
+    return userId || 'unknown'
+  }
+
+  private getCachedUserName(userId: string): string | undefined {
+    return this.userInfoCache.peek(userId)
+  }
+
+  private applyResolvedUserName(user: LarkUserIdentity, resolvedName: string): void {
+    user.fullName = resolvedName
+    user.userName = resolvedName
+  }
+
+  private attachLazyUserNameResolution(user: LarkUserIdentity): void {
+    const openId = user.userId
+    if (!this.shouldLookupUsersLazily() || !this.shouldLookupUsersAtAll() || !openId) {
+      return
+    }
+
+    let currentName = user.fullName
+    let lookupStarted = false
+    const startLookup = () => {
+      const cachedName = this.getCachedUserName(openId)
+      if (cachedName) {
+        currentName = cachedName
+        return
+      }
+      if (lookupStarted) {
+        return
+      }
+      lookupStarted = true
+      void this.lookupUser(openId).then((resolvedName) => {
+        currentName = resolvedName
+        return undefined
+      })
+    }
+    const buildDescriptor = () => ({
+      configurable: true,
+      enumerable: true,
+      get: () => {
+        startLookup()
+        return currentName
+      },
+      set: (value: string) => {
+        currentName = value
+      },
+    })
+
+    Object.defineProperty(user, 'fullName', buildDescriptor())
+    Object.defineProperty(user, 'userName', buildDescriptor())
+  }
+
+  private createUserIdentity(input: LarkUserIdentityInput): LarkUserIdentity {
+    const cachedName = this.getCachedUserName(input.userId)
+    const resolvedName = input.mentionName ?? cachedName ?? this.getUserFallbackName(input.userId)
+    const userId = input.userId || 'unknown'
+    const user: LarkUserIdentity = {
+      fullName: resolvedName,
+      isBot: input.isBot,
+      isMe: input.isMe,
+      userId,
+      userName: resolvedName,
+    }
+
+    if (input.userId && !input.mentionName && !cachedName) {
+      this.attachLazyUserNameResolution(user)
+    }
+
+    return user
+  }
+
+  private async resolveUserIdentity(input: LarkUserIdentityInput): Promise<LarkUserIdentity> {
+    const user = this.createUserIdentity(input)
+    if (this.shouldLookupUsersEagerly() && input.userId && this.shouldLookupUsersAtAll()) {
+      const resolvedName = await this.lookupUser(input.userId)
+      this.applyResolvedUserName(user, resolvedName)
+    }
+    return user
   }
 
   private cacheThreadRootMessage(
@@ -479,9 +568,16 @@ export class LarkAdapter implements Adapter<LarkThreadId, LarkRaw> {
     const msg = raw.message
     const messageType = msg.message_type ?? ''
     const isMedia = MEDIA_MESSAGE_TYPES.has(messageType)
+    const openId = raw.sender.sender_id?.open_id ?? ''
+    const mentionName = msg.mentions?.find((mention) => mention.id.open_id === openId)?.name
     return new Message<LarkRaw>({
       attachments: this.buildAttachments(msg.message_id, messageType, msg.content),
-      author: buildAuthor(raw, this.botOpenId),
+      author: this.createUserIdentity({
+        isBot: raw.sender.sender_type === 'bot',
+        isMe: openId === this.botOpenId,
+        mentionName,
+        userId: openId,
+      }),
       formatted: this.converter.toAst(msg.content),
       id: msg.message_id,
       isMention: buildIsMention(raw, this.botOpenId),
@@ -878,34 +974,21 @@ export class LarkAdapter implements Adapter<LarkThreadId, LarkRaw> {
   private cacheChannelType(chatId: string, entry: ChannelCacheEntry): void {
     const next = { ...this.channelTypeMap.get(chatId), ...entry }
     this.channelTypeMap.set(chatId, next)
-    const state = this.chat.getState()
-    void state.set(`lark:channel:${chatId}`, next, CHANNEL_CACHE_TTL_MS)
   }
 
   private async lookupUser(openId: string): Promise<string> {
-    const memCached = this.userNameCache.get(openId)
-    if (memCached) return memCached
-
-    const state = this.chat.getState()
-    const cacheKey = `lark:user:${openId}`
-    const cached = await state.get<{ name: string }>(cacheKey)
-    if (cached) {
-      this.userNameCache.set(openId, cached.name)
-      return cached.name
-    }
-
-    try {
-      const res = await this.api.getUser(openId)
-      const name = res.data?.user?.name ?? openId
-      this.userNameCache.set(openId, name)
-      await state.set(cacheKey, { name }, USER_CACHE_TTL_MS)
-      return name
-    } catch {
-      this.logger.warn('Failed to lookup user', { openId })
-      this.userNameCache.set(openId, openId)
-      await state.set(cacheKey, { name: openId }, FAILED_LOOKUP_TTL_MS)
-      return openId
-    }
+    return this.userInfoCache.resolve(openId, {
+      failureTtlMs: FAILED_LOOKUP_TTL_MS,
+      fallbackValue: this.getUserFallbackName(openId),
+      loader: async () => {
+        const res = await this.api.getUser(openId)
+        return res.data?.user?.name ?? this.getUserFallbackName(openId)
+      },
+      onError: () => {
+        this.logger.debug('Failed to lookup user', { openId })
+      },
+      ttlMs: USER_CACHE_TTL_MS,
+    })
   }
 
   private createEventDispatcher(options?: WebhookOptions): EventDispatcher {
@@ -976,15 +1059,11 @@ export class LarkAdapter implements Adapter<LarkThreadId, LarkRaw> {
 
     const factory = async (): Promise<Message<LarkRaw>> => {
       // Seed user cache from mentions (free data)
-      const state = this.chat.getState()
       for (const mention of msg.mentions ?? []) {
         if (mention.name && mention.id?.open_id) {
-          this.userNameCache.set(mention.id.open_id, mention.name)
-          void state.set(
-            `lark:user:${mention.id.open_id}`,
-            { name: mention.name },
-            USER_CACHE_TTL_MS,
-          )
+          void this.userInfoCache
+            .set(mention.id.open_id, mention.name, { ttlMs: USER_CACHE_TTL_MS })
+            .catch(() => undefined)
         }
       }
 
@@ -994,12 +1073,11 @@ export class LarkAdapter implements Adapter<LarkThreadId, LarkRaw> {
         this.cacheChannelType(msg.chat_id, { chatMode: chatType })
       }
 
-      const openId = data.sender.sender_id?.open_id ?? ''
-      const resolvedName = openId ? await this.lookupUser(openId) : ''
       const message = this.parseMessage(data)
-      if (resolvedName) {
-        message.author.fullName = resolvedName
-        message.author.userName = resolvedName
+      const openId = data.sender.sender_id?.open_id ?? ''
+      if (this.shouldLookupUsersEagerly() && openId) {
+        const resolvedName = await this.lookupUser(openId)
+        this.applyResolvedUserName(message.author as LarkUserIdentity, resolvedName)
       }
       return message
     }
@@ -1019,12 +1097,20 @@ export class LarkAdapter implements Adapter<LarkThreadId, LarkRaw> {
     const messageId = data.message_id
     const userId = data.user_id?.open_id ?? ''
     const emoji = fromLarkReactionEmojiType(emojiType)
+    const user = this.createUserIdentity({
+      isBot: 'unknown',
+      isMe: userId === this.botOpenId,
+      userId,
+    })
 
     void Promise.all([
       this.resolveReactionThreadId(messageId),
-      userId ? this.lookupUser(userId) : Promise.resolve(''),
-    ]).then(([threadId, resolvedName]) =>
-      this.chat.processReaction(
+      this.shouldLookupUsersEagerly() && userId ? this.lookupUser(userId) : Promise.resolve(''),
+    ]).then(([threadId, resolvedName]) => {
+      if (resolvedName) {
+        this.applyResolvedUserName(user, resolvedName)
+      }
+      return this.chat.processReaction(
         {
           adapter: this,
           added,
@@ -1033,17 +1119,11 @@ export class LarkAdapter implements Adapter<LarkThreadId, LarkRaw> {
           raw: data,
           rawEmoji: emojiType,
           threadId,
-          user: {
-            fullName: resolvedName,
-            isBot: 'unknown' as const,
-            isMe: false,
-            userId,
-            userName: resolvedName,
-          },
+          user,
         },
         options,
-      ),
-    )
+      )
+    })
   }
 
   private async resolveReactionThreadId(messageId: string): Promise<string> {
@@ -1270,15 +1350,20 @@ export class LarkAdapter implements Adapter<LarkThreadId, LarkRaw> {
     }
 
     const task = this.resolveCardActionThreadId(chatId, messageId)
-      .then((threadId) => {
+      .then(async (threadId) => {
+        const user = await this.resolveUserIdentity({
+          isBot: false,
+          isMe: userId === this.botOpenId,
+          userId,
+        })
         if (isModal && action.value?.['__modalClose'] === MODAL_MARKER) {
-          return this.dispatchModalClose(action, userId, messageId, threadId, options)
+          return this.dispatchModalClose(action, user, messageId, threadId, options)
         }
         if (isModal && action.form_value) {
-          this.dispatchModalSubmit(action, userId, messageId, threadId, options)
+          this.dispatchModalSubmit(action, user, messageId, threadId, options)
           return undefined
         }
-        this.dispatchAction(action, userId, messageId, threadId, event.token, options)
+        this.dispatchAction(action, user, messageId, threadId, event.token, options)
         return undefined
       })
       .catch((err: unknown) => {
@@ -1289,7 +1374,7 @@ export class LarkAdapter implements Adapter<LarkThreadId, LarkRaw> {
 
   private dispatchModalClose(
     action: NonNullable<NonNullable<LarkCardActionBody['event']>['action']>,
-    userId: string,
+    user: LarkUserIdentity,
     messageId: string,
     _threadId: string,
     options?: WebhookOptions,
@@ -1307,7 +1392,7 @@ export class LarkAdapter implements Adapter<LarkThreadId, LarkRaw> {
           callbackId,
           privateMetadata,
           raw: action,
-          user: minimalUser(userId),
+          user,
           viewId: messageId,
         },
         contextId,
@@ -1320,7 +1405,7 @@ export class LarkAdapter implements Adapter<LarkThreadId, LarkRaw> {
 
   private dispatchModalSubmit(
     action: NonNullable<NonNullable<LarkCardActionBody['event']>['action']>,
-    userId: string,
+    user: LarkUserIdentity,
     messageId: string,
     threadId: string,
     options?: WebhookOptions,
@@ -1342,7 +1427,7 @@ export class LarkAdapter implements Adapter<LarkThreadId, LarkRaw> {
         callbackId,
         privateMetadata,
         raw: action,
-        user: minimalUser(userId),
+        user,
         values,
         viewId: messageId,
       },
@@ -1364,7 +1449,7 @@ export class LarkAdapter implements Adapter<LarkThreadId, LarkRaw> {
 
   private dispatchAction(
     action: NonNullable<NonNullable<LarkCardActionBody['event']>['action']>,
-    userId: string,
+    user: LarkUserIdentity,
     messageId: string,
     threadId: string,
     token?: string,
@@ -1384,7 +1469,7 @@ export class LarkAdapter implements Adapter<LarkThreadId, LarkRaw> {
         raw: action,
         threadId,
         triggerId,
-        user: minimalUser(userId),
+        user,
         value: value || undefined,
       },
       options,
@@ -1635,18 +1720,15 @@ export class LarkAdapter implements Adapter<LarkThreadId, LarkRaw> {
     const isMedia = MEDIA_MESSAGE_TYPES.has(messageType)
     const sender = item.sender
     const senderId = sender?.id ?? ''
-    const resolvedName = senderId ? await this.lookupUser(senderId) : 'unknown'
     const author = sender
-      ? {
-          fullName: resolvedName,
+      ? await this.resolveUserIdentity({
           isBot: sender.sender_type === 'app',
           isMe:
             sender.id_type === 'app_id'
               ? sender.id === this.config.appId
               : sender.id === this.botOpenId,
-          userId: sender.id,
-          userName: resolvedName,
-        }
+          userId: senderId,
+        })
       : unknownAuthor()
     return new Message<LarkRaw>({
       attachments: this.buildAttachments(messageId, messageType, content),

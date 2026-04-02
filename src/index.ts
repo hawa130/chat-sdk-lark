@@ -5,6 +5,7 @@ export type {
   LarkRaw,
   LarkRawMessage,
   LarkThreadId,
+  LarkUserInfoResolutionStrategy,
   LarkWsAgent,
   LarkWsConfig,
 } from './types.ts'
