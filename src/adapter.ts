@@ -41,7 +41,7 @@ import type { PlatformName } from '@chat-adapter/shared'
 import { ValidationError, extractCard, extractFiles, toBuffer } from '@chat-adapter/shared'
 import type { EventHandles } from '@larksuiteoapi/node-sdk'
 import { CardActionHandler, EventDispatcher, LoggerLevel, WSClient } from '@larksuiteoapi/node-sdk'
-import { ConsoleLogger, Message } from 'chat'
+import { ConsoleLogger, Message, getEmoji } from 'chat'
 import { LarkApiClient } from './api-client.ts'
 import { LarkFormatConverter } from './format-converter.ts'
 import { bridgeWebhook, buildWebhookRequest } from './event-bridge.ts'
@@ -115,12 +115,48 @@ const renderMessage = (
   return renderObjectMessage(message, converter)
 }
 
+const CHAT_TO_LARK_REACTION_EMOJI: Record<string, string> = {
+  thumbs_up: 'THUMBSUP',
+  thumbs_down: 'ThumbsDown',
+  clap: 'CLAP',
+  wave: 'WAVE',
+  muscle: 'MUSCLE',
+  ok_hand: 'OK',
+  shrug: 'Shrug',
+  facepalm: 'FACEPALM',
+  heart: 'HEART',
+  smile: 'SMILE',
+  laugh: 'LAUGH',
+  thinking: 'THINKING',
+  cry: 'CRY',
+  angry: 'ANGRY',
+  wink: 'WINK',
+  fire: 'Fire',
+  party: 'PARTY',
+  gift: 'GIFT',
+  check: 'CheckMark',
+  x: 'CrossMark',
+  '100': 'Hundred',
+}
+
+const LARK_TO_CHAT_REACTION_EMOJI: Record<string, string> = Object.fromEntries(
+  Object.entries(CHAT_TO_LARK_REACTION_EMOJI).map(([chatName, larkName]) => [larkName, chatName]),
+)
+
 const extractEmojiName = (emoji: EmojiValue | string): string => {
   if (typeof emoji === 'string') {
     return emoji
   }
   return emoji.name
 }
+
+const toLarkReactionEmojiType = (emoji: EmojiValue | string): string => {
+  const emojiName = extractEmojiName(emoji)
+  return CHAT_TO_LARK_REACTION_EMOJI[emojiName] ?? emojiName
+}
+
+const fromLarkReactionEmojiType = (emojiType: string): EmojiValue =>
+  getEmoji(LARK_TO_CHAT_REACTION_EMOJI[emojiType] ?? emojiType)
 
 const extractText = (content: string): string => {
   try {
@@ -518,7 +554,7 @@ export class LarkAdapter implements Adapter<LarkThreadId, LarkRaw> {
     messageId: string,
     emoji: EmojiValue | string,
   ): Promise<void> {
-    await this.api.addReaction(messageId, extractEmojiName(emoji))
+    await this.api.addReaction(messageId, toLarkReactionEmojiType(emoji))
   }
 
   async removeReaction(
@@ -526,7 +562,7 @@ export class LarkAdapter implements Adapter<LarkThreadId, LarkRaw> {
     messageId: string,
     emoji: EmojiValue | string,
   ): Promise<void> {
-    const emojiName = extractEmojiName(emoji)
+    const emojiName = toLarkReactionEmojiType(emoji)
     const res = await this.api.listReactions(messageId)
     const items = res.data?.items ?? []
     const match =
