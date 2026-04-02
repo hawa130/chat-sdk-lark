@@ -40,7 +40,7 @@ import type {
 import type { PlatformName } from '@chat-adapter/shared'
 import { ValidationError, extractCard, extractFiles, toBuffer } from '@chat-adapter/shared'
 import type { EventHandles } from '@larksuiteoapi/node-sdk'
-import { CardActionHandler, EventDispatcher } from '@larksuiteoapi/node-sdk'
+import { CardActionHandler, EventDispatcher, WSClient } from '@larksuiteoapi/node-sdk'
 import { ConsoleLogger, Message } from 'chat'
 import { LarkApiClient } from './api-client.ts'
 import { LarkFormatConverter } from './format-converter.ts'
@@ -260,6 +260,13 @@ const USER_CACHE_TTL_MS = 8 * 24 * 60 * 60 * 1000
 const CHANNEL_CACHE_TTL_MS = 8 * 24 * 60 * 60 * 1000
 const FAILED_LOOKUP_TTL_MS = 1 * 24 * 60 * 60 * 1000
 const EPHEMERAL_ELEMENT_ID = 'eph_md'
+const WS_OPEN_STATE = 1
+const WEBHOOK_EVENT_TYPES = new Set([
+  'im.chat.member.bot.added_v1',
+  'im.message.reaction.created_v1',
+  'im.message.reaction.deleted_v1',
+  'im.message.receive_v1',
+])
 
 export class LarkAdapter implements Adapter<LarkThreadId, LarkRaw> {
   readonly name = ADAPTER_NAME
@@ -276,6 +283,8 @@ export class LarkAdapter implements Adapter<LarkThreadId, LarkRaw> {
   private readonly channelTypeMap = new Map<string, ChannelCacheEntry>()
   private readonly threadRootMessageMap = new Map<string, string>()
   private readonly userNameCache = new Map<string, string>()
+  private wsClient?: WSClient
+  private wsStartPromise?: Promise<void>
 
   get userName(): string {
     return this.resolvedUserName
@@ -289,6 +298,33 @@ export class LarkAdapter implements Adapter<LarkThreadId, LarkRaw> {
       encryptKey: config.encryptKey,
       verificationToken: config.verificationToken,
     })
+  }
+
+  private get incomingConfig(): { callbacks: string; events: string } {
+    return {
+      callbacks: this.config.incoming?.callbacks ?? 'webhook',
+      events: this.config.incoming?.events ?? 'webhook',
+    }
+  }
+
+  private shouldHandleWebhookCallbacks(): boolean {
+    return this.incomingConfig.callbacks === 'webhook'
+  }
+
+  private shouldHandleWebhookEvents(): boolean {
+    return this.incomingConfig.events === 'webhook'
+  }
+
+  private shouldUseWsForCallbacks(): boolean {
+    return this.incomingConfig.callbacks === 'ws'
+  }
+
+  private shouldUseWsForEvents(): boolean {
+    return this.incomingConfig.events === 'ws'
+  }
+
+  private shouldStartWsClient(): boolean {
+    return this.shouldUseWsForCallbacks() || this.shouldUseWsForEvents()
   }
 
   async initialize(chat: ChatInstance): Promise<void> {
@@ -311,10 +347,12 @@ export class LarkAdapter implements Adapter<LarkThreadId, LarkRaw> {
     if (info.bot?.app_name && !this.config.userName) {
       this.resolvedUserName = info.bot.app_name
     }
+    await this.startWsClientIfNeeded()
     this.logger.info('Initialized', { botOpenId: this.botOpenId })
   }
 
   async disconnect(): Promise<void> {
+    this.stopWsClient()
     this.userNameCache.clear()
     this.channelTypeMap.clear()
     this.threadRootMessageMap.clear()
@@ -372,6 +410,12 @@ export class LarkAdapter implements Adapter<LarkThreadId, LarkRaw> {
     }
 
     const eventType = await this.resolveWebhookEventType(request, body)
+    if (eventType === 'card.action.trigger' && !this.shouldHandleWebhookCallbacks()) {
+      return this.ignoreWebhookRequest(request, 'callback', eventType)
+    }
+    if (eventType && WEBHOOK_EVENT_TYPES.has(eventType) && !this.shouldHandleWebhookEvents()) {
+      return this.ignoreWebhookRequest(request, 'event', eventType)
+    }
     const dispatcher =
       eventType === 'card.action.trigger'
         ? this.createCardActionHandler(options)
@@ -845,6 +889,35 @@ export class LarkAdapter implements Adapter<LarkThreadId, LarkRaw> {
     return dispatcher
   }
 
+  private createWsDispatcher(): EventDispatcher {
+    const dispatcher = new EventDispatcher({})
+    const handlers: Record<string, (data: unknown) => void> = {}
+
+    if (this.shouldUseWsForEvents()) {
+      handlers['im.chat.member.bot.added_v1'] = (data) => {
+        this.logger.info('Bot added to chat', data)
+      }
+      handlers['im.message.reaction.created_v1'] = (data) => {
+        this.handleReactionEvent(data as EventData<'im.message.reaction.created_v1'>, true)
+      }
+      handlers['im.message.reaction.deleted_v1'] = (data) => {
+        this.handleReactionEvent(data as EventData<'im.message.reaction.deleted_v1'>, false)
+      }
+      handlers['im.message.receive_v1'] = (data) => {
+        this.handleMessageEvent(data as EventData<'im.message.receive_v1'>)
+      }
+    }
+
+    if (this.shouldUseWsForCallbacks()) {
+      handlers['card.action.trigger'] = (data) => {
+        this.handleCardAction(data as ParsedCardActionEvent)
+      }
+    }
+
+    dispatcher.register(handlers as EventHandles & Record<string, (data: unknown) => void>)
+    return dispatcher
+  }
+
   private handleMessageEvent(
     data: EventData<'im.message.receive_v1'>,
     options?: WebhookOptions,
@@ -983,8 +1056,132 @@ export class LarkAdapter implements Adapter<LarkThreadId, LarkRaw> {
     )
   }
 
+  private createIgnoredEventDispatcher(eventType: string): EventDispatcher {
+    const dispatcher = new EventDispatcher({
+      encryptKey: this.config.encryptKey,
+      verificationToken: this.config.verificationToken,
+    })
+    dispatcher.register({
+      [eventType]: () => undefined,
+    } as EventHandles)
+    return dispatcher
+  }
+
+  private createIgnoredCardActionHandler(): CardActionHandler {
+    return new CardActionHandler(
+      {
+        encryptKey: this.config.encryptKey,
+        verificationToken: this.config.verificationToken,
+      },
+      async () => ({}),
+    )
+  }
+
+  private async ignoreWebhookRequest(
+    request: Request,
+    kind: 'callback' | 'event',
+    eventType: string,
+  ): Promise<Response> {
+    this.logger.warn('Ignoring webhook request for non-webhook incoming transport', {
+      eventType,
+      incoming: this.incomingConfig,
+      kind,
+    })
+
+    const dispatcher =
+      kind === 'callback'
+        ? this.createIgnoredCardActionHandler()
+        : this.createIgnoredEventDispatcher(eventType)
+
+    try {
+      const result = await bridgeWebhook(request, dispatcher)
+      return Response.json(result ?? {}, { status: HTTP_OK })
+    } catch (error) {
+      if (this.isVerificationError(error)) {
+        return new Response('Forbidden', { status: HTTP_FORBIDDEN })
+      }
+      throw error
+    }
+  }
+
   private isVerificationError(error: unknown): boolean {
     return error instanceof Error && error.message === 'Webhook verification failed'
+  }
+
+  private getWsInstance(): {
+    readyState?: number
+  } | null {
+    // The Lark SDK keeps wsConfig private on WSClient, so we cannot model it with
+    // a normal structural extension without collapsing the type to never. We only
+    // use unknown here to inspect the minimal runtime shape needed to read the
+    // active socket state.
+    const wsConfig = (
+      this.wsClient as unknown as
+        | {
+            wsConfig?: {
+              getWSInstance?: () => { readyState?: number } | null
+            }
+          }
+        | undefined
+    )?.wsConfig
+    return wsConfig?.getWSInstance?.() ?? null
+  }
+
+  private hasActiveWsConnection(): boolean {
+    return this.getWsInstance()?.readyState === WS_OPEN_STATE
+  }
+
+  private async startWsClientIfNeeded(): Promise<void> {
+    if (!this.shouldStartWsClient()) {
+      return
+    }
+    if (this.hasActiveWsConnection()) {
+      return
+    }
+    if (this.wsStartPromise) {
+      await this.wsStartPromise
+      return
+    }
+    if (this.wsClient) {
+      this.stopWsClient()
+    }
+
+    const wsClient = new WSClient({
+      appId: this.config.appId,
+      appSecret: this.config.appSecret,
+      ...(this.config.domain !== undefined && { domain: this.config.domain }),
+      ...(this.config.httpInstance !== undefined && { httpInstance: this.config.httpInstance }),
+      ...(this.config.ws?.agent !== undefined && { agent: this.config.ws.agent }),
+      ...(this.config.ws?.autoReconnect !== undefined && {
+        autoReconnect: this.config.ws.autoReconnect,
+      }),
+      ...(this.config.ws?.loggerLevel !== undefined && {
+        loggerLevel: this.config.ws.loggerLevel,
+      }),
+    })
+    this.wsClient = wsClient
+    this.wsStartPromise = wsClient
+      .start({
+        eventDispatcher: this.createWsDispatcher(),
+      })
+      .then(() => {
+        return undefined
+      })
+      .catch((error: unknown) => {
+        this.wsClient = undefined
+        throw error
+      })
+      .finally(() => {
+        this.wsStartPromise = undefined
+      })
+
+    await this.wsStartPromise
+  }
+
+  private stopWsClient(): void {
+    this.wsClient?.close()
+    this.wsClient = undefined
+    this.wsStartPromise = undefined
   }
 
   private async resolveCardActionThreadId(chatId: string, messageId: string): Promise<string> {

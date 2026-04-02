@@ -1,4 +1,10 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { AppType, LoggerLevel } from '@larksuiteoapi/node-sdk'
+import type { LarkAdapterConfig } from '../src/types.ts'
+
+type AdapterWithConfig = {
+  config: LarkAdapterConfig
+}
 
 describe('createLarkAdapter', () => {
   const originalEnv = { ...process.env }
@@ -87,5 +93,64 @@ describe('createLarkAdapter', () => {
     }
     const { createLarkAdapter } = await import('../src/factory.ts')
     expect(() => createLarkAdapter({ logger: mockLogger })).not.toThrow()
+  })
+
+  it('defaults incoming transport to webhook for events and callbacks', async () => {
+    process.env.LARK_APP_ID = 'id'
+    process.env.LARK_APP_SECRET = 'secret'
+    const { createLarkAdapter } = await import('../src/factory.ts')
+    const adapter = createLarkAdapter()
+    const config = (adapter as unknown as AdapterWithConfig).config
+
+    expect(config.incoming).toEqual({
+      callbacks: 'webhook',
+      events: 'webhook',
+    })
+  })
+
+  it('fills missing incoming transport values with webhook defaults', async () => {
+    process.env.LARK_APP_ID = 'id'
+    process.env.LARK_APP_SECRET = 'secret'
+    const { createLarkAdapter } = await import('../src/factory.ts')
+    const adapter = createLarkAdapter({
+      incoming: { events: 'ws' },
+    })
+    const config = (adapter as unknown as AdapterWithConfig).config
+
+    expect(config.incoming).toEqual({
+      callbacks: 'webhook',
+      events: 'ws',
+    })
+  })
+
+  it('passes ws config through to adapter', async () => {
+    process.env.LARK_APP_ID = 'id'
+    process.env.LARK_APP_SECRET = 'secret'
+    const { createLarkAdapter } = await import('../src/factory.ts')
+    const adapter = createLarkAdapter({
+      ws: {
+        autoReconnect: false,
+        loggerLevel: LoggerLevel.debug,
+      },
+    })
+    const config = (adapter as unknown as AdapterWithConfig).config
+
+    expect(config.ws).toEqual({
+      autoReconnect: false,
+      loggerLevel: LoggerLevel.debug,
+    })
+  })
+
+  it('rejects ws incoming transport for ISV apps', async () => {
+    process.env.LARK_APP_ID = 'id'
+    process.env.LARK_APP_SECRET = 'secret'
+    const { createLarkAdapter } = await import('../src/factory.ts')
+
+    expect(() =>
+      createLarkAdapter({
+        appType: AppType.ISV,
+        incoming: { events: 'ws' },
+      }),
+    ).toThrow(/self-build|SelfBuild|ws/i)
   })
 })

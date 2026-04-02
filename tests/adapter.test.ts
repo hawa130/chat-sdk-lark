@@ -1,5 +1,6 @@
 import { HttpResponse, http } from 'msw'
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
+import { LoggerLevel, WSClient } from '@larksuiteoapi/node-sdk'
 import { LarkAdapter } from '../src/adapter.ts'
 import type { LarkRawMessage } from '../src/types.ts'
 import { fixtures } from './fixtures.ts'
@@ -125,10 +126,110 @@ type EphemeralSendPayload = {
 }
 
 beforeAll(() => server.listen({ onUnhandledRequest: 'bypass' }))
-afterEach(() => server.resetHandlers())
+afterEach(() => {
+  server.resetHandlers()
+  vi.restoreAllMocks()
+})
 afterAll(() => server.close())
 
 describe('LarkAdapter', () => {
+  describe('websocket incoming', () => {
+    it('starts WS client during initialize when events use ws transport', async () => {
+      const startSpy = vi.spyOn(WSClient.prototype, 'start').mockResolvedValue(undefined)
+      const adapter = makeAdapter({
+        incoming: { callbacks: 'webhook', events: 'ws' },
+        ws: { autoReconnect: false, loggerLevel: LoggerLevel.debug },
+      })
+
+      await initAdapter(adapter)
+
+      expect(startSpy).toHaveBeenCalledTimes(1)
+      expect(startSpy).toHaveBeenCalledWith({
+        eventDispatcher: expect.anything(),
+      })
+    })
+
+    it('closes WS client during disconnect when ws transport is enabled', async () => {
+      vi.spyOn(WSClient.prototype, 'start').mockResolvedValue(undefined)
+      const closeSpy = vi.spyOn(WSClient.prototype, 'close').mockImplementation(() => undefined)
+      const adapter = makeAdapter({
+        incoming: { callbacks: 'webhook', events: 'ws' },
+      })
+
+      await initAdapter(adapter)
+      await adapter.disconnect()
+
+      expect(closeSpy).toHaveBeenCalledTimes(1)
+    })
+
+    it('retries WS startup on reinitialize when no socket connection was established', async () => {
+      const startSpy = vi.spyOn(WSClient.prototype, 'start').mockResolvedValue(undefined)
+      const closeSpy = vi.spyOn(WSClient.prototype, 'close').mockImplementation(() => undefined)
+      const adapter = makeAdapter({
+        incoming: { callbacks: 'webhook', events: 'ws' },
+      })
+      const mockChat = makeMockChat()
+      server.use(tokenHandler, botInfoHandler, createCardHandler, userInfoHandler)
+
+      await adapter.initialize(mockChat as never)
+      await adapter.initialize(mockChat as never)
+
+      expect(startSpy).toHaveBeenCalledTimes(2)
+      expect(closeSpy).toHaveBeenCalledTimes(1)
+    })
+
+    it('routes ws message events to processMessage', async () => {
+      let dispatcher: { invoke: (data: Record<string, unknown>) => Promise<unknown> } | undefined
+      vi.spyOn(WSClient.prototype, 'start').mockImplementation(async ({ eventDispatcher }) => {
+        dispatcher = eventDispatcher as typeof dispatcher
+      })
+      const adapter = makeAdapter({
+        incoming: { callbacks: 'webhook', events: 'ws' },
+      })
+      const mockChat = await initAdapter(adapter)
+
+      await dispatcher?.invoke(makeMessageEvent() as Record<string, unknown>)
+
+      expect(mockChat.processMessage).toHaveBeenCalledTimes(1)
+    })
+
+    it('routes ws card callbacks to processAction', async () => {
+      let dispatcher: { invoke: (data: Record<string, unknown>) => Promise<unknown> } | undefined
+      vi.spyOn(WSClient.prototype, 'start').mockImplementation(async ({ eventDispatcher }) => {
+        dispatcher = eventDispatcher as typeof dispatcher
+      })
+      const adapter = makeAdapter({
+        incoming: { callbacks: 'ws', events: 'webhook' },
+      })
+      const mockChat = await initAdapter(adapter)
+      server.use(
+        http.get(`${BASE}/open-apis/im/v1/messages/:message_id`, () =>
+          HttpResponse.json({
+            code: 0,
+            data: {
+              items: [
+                {
+                  chat_id: 'oc_chat001',
+                  message_id: 'om_card_msg001',
+                  root_id: 'om_root001',
+                  thread_id: 'omt_thread001',
+                },
+              ],
+            },
+          }),
+        ),
+      )
+
+      await dispatcher?.invoke(
+        makeCardActionEvent('approve', 'order_123') as Record<string, unknown>,
+      )
+
+      await vi.waitFor(() => {
+        expect(mockChat.processAction).toHaveBeenCalledTimes(1)
+      })
+    })
+  })
+
   describe('thread ID encoding', () => {
     it('encodes chatId only', () => {
       const adapter = makeAdapter()
@@ -256,6 +357,18 @@ describe('LarkAdapter', () => {
       // Execute factory to get message
       const message = await (call[2] as () => Promise<unknown>)()
       expect((message as { text: string }).text).toContain('hello bot')
+    })
+
+    it('does not route message webhooks when events use ws transport', async () => {
+      const adapter = makeAdapter({
+        incoming: { callbacks: 'webhook', events: 'ws' },
+      })
+      const mockChat = await initAdapter(adapter)
+
+      const res = await adapter.handleWebhook(makeRequest(makeMessageEvent()))
+
+      expect(res.status).toBe(200)
+      expect(mockChat.processMessage).not.toHaveBeenCalled()
     })
 
     it('extracts thread_id from message events', async () => {
@@ -393,6 +506,20 @@ describe('LarkAdapter', () => {
       expect(adapter.decodeThreadId(actionEvent.threadId).threadId).toBe('omt_thread001')
       expect(actionEvent.triggerId).toBe('oc_chat001:om_card_msg001')
       expect(actionEvent.user.userId).toBe('ou_user1')
+    })
+
+    it('does not route card webhooks when callbacks use ws transport', async () => {
+      const adapter = makeAdapter({
+        incoming: { callbacks: 'ws', events: 'webhook' },
+      })
+      const mockChat = await initAdapter(adapter)
+
+      const res = await adapter.handleWebhook(
+        makeRequest(makeCardActionEvent('approve', 'order_123')),
+      )
+
+      expect(res.status).toBe(200)
+      expect(mockChat.processAction).not.toHaveBeenCalled()
     })
 
     it('rejects card.action.trigger when verification token does not match', async () => {

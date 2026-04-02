@@ -1,9 +1,30 @@
-import type { AppType, Cache, Domain, HttpInstance } from '@larksuiteoapi/node-sdk'
+import type { Agent } from 'node:http'
+import type { AppType, Cache, Domain, HttpInstance, LoggerLevel } from '@larksuiteoapi/node-sdk'
 import type { Logger } from 'chat'
 
 interface LarkThreadId {
   chatId: string
   threadId?: string
+}
+
+type LarkIncomingMode = 'disabled' | 'webhook' | 'ws'
+
+interface LarkIncomingConfig {
+  /** Incoming transport for subscribed events like messages and reactions */
+  events?: LarkIncomingMode
+  /** Incoming transport for callbacks like card.action.trigger */
+  callbacks?: LarkIncomingMode
+}
+
+type LarkWsAgent = Agent
+
+interface LarkWsConfig {
+  /** Whether the WS client should reconnect automatically */
+  autoReconnect?: boolean
+  /** Logger level passed to Lark's WS client */
+  loggerLevel?: LoggerLevel
+  /** Optional Node agent for proxy or custom socket handling */
+  agent?: LarkWsAgent
 }
 
 interface LarkAdapterConfig {
@@ -31,6 +52,10 @@ interface LarkAdapterConfig {
   httpInstance?: HttpInstance
   /** Custom summary text shown in chat list during card streaming (defaults to Lark's "[生成中...]") */
   streamingSummary?: string
+  /** Incoming transport selection for events and callbacks */
+  incoming?: LarkIncomingConfig
+  /** Optional Lark WS client config when incoming transport uses ws */
+  ws?: LarkWsConfig
 }
 
 /** Raw event data from im.message.receive_v1, as delivered by the SDK's EventDispatcher. */
@@ -321,7 +346,7 @@ interface LarkWebhookBody {
 
 /**
  * card.action.trigger callback (v2 schema).
- * NOT handled by EventDispatcher — routed at the webhook level.
+ * Used by both webhook callback handling and WS EventDispatcher handling.
  */
 interface LarkCardActionBody extends LarkWebhookBody {
   event?: {
@@ -380,6 +405,8 @@ export type {
   LarkFormElement,
   LarkHrElement,
   LarkImageContent,
+  LarkIncomingConfig,
+  LarkIncomingMode,
   LarkImgElement,
   LarkInputElement,
   LarkInteractiveContent,
@@ -396,4 +423,6 @@ export type {
   LarkTextContent,
   LarkThreadId,
   LarkWebhookBody,
+  LarkWsAgent,
+  LarkWsConfig,
 }

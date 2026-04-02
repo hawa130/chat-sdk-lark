@@ -54,6 +54,40 @@ app.post('/webhook/lark', (c) => bot.webhooks.lark(c.req.raw))
 
 Webhook handlers use the standard [Fetch API](https://developer.mozilla.org/en-US/docs/Web/API/Request) `Request`/`Response` types. Frameworks that don't natively provide a Fetch `Request` (e.g. Express) need a conversion step — see your framework's docs for how to adapt incoming requests.
 
+## WebSocket incoming
+
+For environments without a public webhook URL, Lark can deliver incoming events and card callbacks over its SDK WebSocket connection. In this mode, explicitly initialize the bot so the adapter can start the long-lived connection:
+
+```typescript
+import { Chat } from 'chat'
+import { createLarkAdapter, LoggerLevel } from 'chat-adapter-lark'
+import { createMemoryState } from '@chat-adapter/state-memory'
+
+const bot = new Chat({
+  userName: 'my-bot',
+  adapters: {
+    lark: createLarkAdapter({
+      incoming: {
+        events: 'ws',
+        callbacks: 'ws',
+      },
+      ws: {
+        loggerLevel: LoggerLevel.info,
+      },
+    }),
+  },
+  state: createMemoryState(),
+})
+
+bot.onNewMention(async (thread, message) => {
+  await thread.post(`You said: ${message.text}`)
+})
+
+await bot.initialize()
+```
+
+`bot.initialize()` is only required for non-webhook incoming transports. In webhook mode, initialization still happens automatically on the first `bot.webhooks.lark(request)` call.
+
 ## Lark app setup
 
 ### 1. Create application
@@ -64,14 +98,29 @@ Webhook handlers use the standard [Fetch API](https://developer.mozilla.org/en-U
 
 ### 2. Configure events and callbacks
 
+Choose one incoming mode for each section below:
+
+**Webhook mode**
+
 1. Set the event subscription URL to your webhook endpoint
 2. URL verification is handled automatically — no extra setup needed
-3. Under **Event configuration**, subscribe to the following events:
+
+**WebSocket mode**
+
+1. In **Event configuration**, choose **Use long connection to receive events**
+2. In **Callback configuration**, choose **Use long connection to receive callbacks**
+3. Keep your bot process running with `await bot.initialize()`
+
+Then subscribe to the following items:
+
+1. Under **Event configuration**, subscribe to the following events:
    - `im.message.receive_v1` — Receive messages (required)
    - `im.message.reaction.created_v1` — Reaction added (if using reactions)
    - `im.message.reaction.deleted_v1` — Reaction removed (if using reactions)
-4. Under **Callback configuration**, add the following callback:
+2. Under **Callback configuration**, add the following callback:
    - `card.action.trigger` — Card button/form interactions (if using interactive cards)
+
+> **Note:** Long connection mode is only available for self-built apps, not marketplace/ISV apps.
 
 ### 3. Add permissions
 
@@ -126,22 +175,55 @@ Or set `LARK_DOMAIN=lark` in your environment variables.
 
 All options are auto-detected from environment variables when not provided. You can call `createLarkAdapter()` with no arguments if the env vars are set.
 
-| Option              | Type           | Default                        | Description                                             |
-| ------------------- | -------------- | ------------------------------ | ------------------------------------------------------- |
-| `appId`             | `string`       | `LARK_APP_ID`                  | Lark App ID                                             |
-| `appSecret`         | `string`       | `LARK_APP_SECRET`              | Lark App Secret                                         |
-| `encryptKey`        | `string`       | `LARK_ENCRYPT_KEY`             | Encrypt key for event decryption                        |
-| `verificationToken` | `string`       | `LARK_VERIFICATION_TOKEN`      | Verification token for v1 events                        |
-| `domain`            | `Domain`       | `Domain.Feishu`                | API domain (`Domain.Feishu` or `Domain.Lark`)           |
-| `userName`          | `string`       | Bot name from API              | Bot display name override                               |
-| `disableTokenCache` | `boolean`      | `false`                        | Disable SDK's internal token caching                    |
-| `logger`            | `Logger`       | `ConsoleLogger`                | Custom logger instance (from `chat` package)            |
-| `appType`           | `AppType`      | `AppType.SelfBuild`            | App type (`AppType.SelfBuild` or `AppType.ISV`)         |
-| `cache`             | `Cache`        | SDK default                    | Custom token cache (e.g. Redis) for distributed deploys |
-| `httpInstance`      | `HttpInstance` | SDK default                    | Custom HTTP client for proxy, timeout, or interceptors  |
-| `streamingSummary`  | `string`       | `"[生成中...]"` (Lark default) | Chat list preview text shown during card streaming      |
+| Option              | Type           | Default                                       | Description                                                   |
+| ------------------- | -------------- | --------------------------------------------- | ------------------------------------------------------------- |
+| `appId`             | `string`       | `LARK_APP_ID`                                 | Lark App ID                                                   |
+| `appSecret`         | `string`       | `LARK_APP_SECRET`                             | Lark App Secret                                               |
+| `encryptKey`        | `string`       | `LARK_ENCRYPT_KEY`                            | Encrypt key for event decryption                              |
+| `verificationToken` | `string`       | `LARK_VERIFICATION_TOKEN`                     | Verification token for v1 events                              |
+| `domain`            | `Domain`       | `Domain.Feishu`                               | API domain (`Domain.Feishu` or `Domain.Lark`)                 |
+| `userName`          | `string`       | Bot name from API                             | Bot display name override                                     |
+| `disableTokenCache` | `boolean`      | `false`                                       | Disable SDK's internal token caching                          |
+| `logger`            | `Logger`       | `ConsoleLogger`                               | Custom logger instance (from `chat` package)                  |
+| `appType`           | `AppType`      | `AppType.SelfBuild`                           | App type (`AppType.SelfBuild` or `AppType.ISV`)               |
+| `cache`             | `Cache`        | SDK default                                   | Custom token cache (e.g. Redis) for distributed deploys       |
+| `httpInstance`      | `HttpInstance` | SDK default                                   | Custom HTTP client for proxy, timeout, or interceptors        |
+| `streamingSummary`  | `string`       | `"[生成中...]"` (Lark default)                | Chat list preview text shown during card streaming            |
+| `incoming`          | `object`       | `{ events: "webhook", callbacks: "webhook" }` | Incoming transport selection for events and callbacks         |
+| `ws`                | `object`       | SDK defaults                                  | Extra Lark WS client options when any incoming mode is `"ws"` |
 
 `appId` and `appSecret` are required — either via config or environment variables. `Domain`, `AppType`, `Cache`, and `HttpInstance` types are re-exported from `@larksuiteoapi/node-sdk`.
+
+### Incoming transport
+
+Use `incoming.events` to choose how message/reaction events are received, and `incoming.callbacks` to choose how interactive card callbacks are received.
+
+| Value        | Meaning                                               |
+| ------------ | ----------------------------------------------------- |
+| `"webhook"`  | Receive that traffic over HTTP webhook                |
+| `"ws"`       | Receive that traffic over Lark's SDK WebSocket client |
+| `"disabled"` | Do not receive that traffic in this process           |
+
+Example:
+
+```typescript
+createLarkAdapter({
+  incoming: {
+    events: 'ws',
+    callbacks: 'webhook',
+  },
+})
+```
+
+### WS options
+
+The `ws` block maps directly to the Lark Node SDK `WSClient` constructor options that are relevant here:
+
+| Option          | Type          | Default                          |
+| --------------- | ------------- | -------------------------------- |
+| `autoReconnect` | `boolean`     | SDK default (`true`)             |
+| `loggerLevel`   | `LoggerLevel` | SDK default (`LoggerLevel.info`) |
+| `agent`         | `http.Agent`  | unset                            |
 
 ## Environment variables
 
@@ -220,6 +302,14 @@ The adapter resolves user display names via the contacts API. If names show as `
 
 1. Add `contact:contact.base:readonly` and `contact:user.base:readonly` permissions
 2. Expand the app's contact scope (通讯录权限范围) in the Lark admin console to include the users you need
+
+### WebSocket mode does not receive traffic
+
+1. Confirm the app is a **self-built app**
+2. Ensure **Event configuration** is set to **Use long connection to receive events**
+3. Ensure **Callback configuration** is set to **Use long connection to receive callbacks**
+4. Verify your process actually calls `await bot.initialize()`
+5. Keep only one incoming transport active per traffic type to avoid confusion during migration
 
 ## Contributing
 
